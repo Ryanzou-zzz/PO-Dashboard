@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>PO订单分析看板 | Kargo & Ansett</title>
+<script>
+// ── 密码保护 ──────────────────────────────────────────
+(function(){
+  const HASH = '82b99d812954020293422de90b28b162c3060667692b9246abd23b9b321041b7';
+  const KEY  = 'po_dash_auth';
+  if(sessionStorage.getItem(KEY)===HASH) return; // 已验证，直接通过
+
+  // 注入登录遮罩
+  document.addEventListener('DOMContentLoaded', function(){
+    const overlay = document.createElement('div');
+    overlay.id = 'authOverlay';
+    overlay.innerHTML = `
+      <div class="auth-box">
+        <div class="auth-logo">📦</div>
+        <h2>PO订单分析看板</h2>
+        <p class="auth-sub">Kargo · Ansett · 内部专用</p>
+        <div class="auth-field">
+          <input type="password" id="authPwd" placeholder="请输入访问密码" autocomplete="current-password"
+            onkeydown="if(event.key==='Enter')window._authCheck()">
+        </div>
+        <div class="auth-err" id="authErr"></div>
+        <button onclick="window._authCheck()">进入看板</button>
+      </div>`;
+    document.body.prepend(overlay);
+    document.getElementById('authPwd').focus();
+  });
+
+  // 验证函数
+  window._authCheck = async function(){
+    const pwd = document.getElementById('authPwd').value;
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pwd));
+    const hex = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    if(hex === HASH){
+      sessionStorage.setItem(KEY, HASH);
+      document.getElementById('authOverlay').remove();
+    } else {
+      const err = document.getElementById('authErr');
+      err.textContent = '密码错误，请重试';
+      err.style.opacity=1;
+      document.getElementById('authPwd').value='';
+      document.getElementById('authPwd').focus();
+    }
+  };
+})();
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* ── 登录遮罩 ─────────────────────────────────────── */
+#authOverlay{position:fixed;inset:0;background:linear-gradient(135deg,#1e3a5f 0%,#1A56DB 100%);
+  display:flex;align-items:center;justify-content:center;z-index:9999}
+.auth-box{background:#fff;border-radius:20px;padding:48px 40px;width:360px;text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.auth-logo{font-size:48px;margin-bottom:12px}
+.auth-box h2{font-size:20px;font-weight:800;color:#1e3a5f;margin-bottom:6px}
+.auth-sub{font-size:13px;color:#6B7280;margin-bottom:28px}
+.auth-field input{width:100%;padding:12px 16px;border:2px solid #E5E7EB;border-radius:10px;
+  font-size:15px;outline:none;transition:.2s;text-align:center;letter-spacing:2px}
+.auth-field input:focus{border-color:#1A56DB}
+.auth-err{height:20px;font-size:12px;color:#EF4444;margin:8px 0;font-weight:600;opacity:0;transition:.3s}
+.auth-box button{margin-top:12px;width:100%;padding:13px;background:#1A56DB;color:#fff;border:none;
+  border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:.2s}
+.auth-box button:hover{background:#1644b0}
+
+:root{
+  --bg:#F0F4F8;--card:#fff;--primary:#1A56DB;--kargo:#1A56DB;--ansett:#7E3AF2;
+  --jigoo:#0E9F6E;--jimmy:#E3A008;--ok:#0E9F6E;--warn:#F59E0B;--delay:#EF4444;
+  --severe:#7F1D1D;--shortage:#BE185D;--border:#E5E7EB;--text:#111827;--muted:#6B7280;
+  --radius:12px;--shadow:0 2px 8px rgba(0,0,0,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);font-family:'Segoe UI',PingFang SC,sans-serif;color:var(--text);font-size:14px}
+
+.topbar{background:linear-gradient(135deg,#1e3a5f 0%,#1A56DB 100%);padding:18px 32px;display:flex;align-items:center;justify-content:space-between}
+.topbar h1{color:#fff;font-size:20px;font-weight:700;letter-spacing:.5px}
+.topbar .meta{color:rgba(255,255,255,.75);font-size:13px;text-align:right;line-height:1.8}
+.topbar .meta span{color:#fff;font-weight:600}
+
+.main{max-width:1440px;margin:0 auto;padding:24px 24px 60px}
+.section-title{font-size:15px;font-weight:700;color:#1e3a5f;margin:28px 0 14px;display:flex;align-items:center;gap:8px}
+.section-title::before{content:'';width:4px;height:18px;background:var(--primary);border-radius:2px;display:inline-block}
+
+/* ── 快报卡片 ─────────────────────────────────── */
+.acct-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.acct-block{background:var(--card);border-radius:var(--radius);padding:22px 24px;box-shadow:var(--shadow)}
+.acct-head{display:flex;align-items:center;gap:8px;margin-bottom:18px}
+.acct-head h3{font-size:15px;font-weight:700}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
+.dot-kargo{background:var(--kargo)}.dot-ansett{background:var(--ansett)}
+.week-badge{margin-left:auto;background:#EFF6FF;color:var(--primary);padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap}
+
+/* 快报：周度区域 */
+.card-section-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
+.qty-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px}
+.amt-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.m-box{background:#F8FAFC;border-radius:10px;padding:12px;text-align:center}
+.m-val{font-size:22px;font-weight:800;line-height:1}
+.m-val-sm{font-size:14px;font-weight:700;line-height:1}
+.m-lbl{font-size:11px;color:var(--muted);margin-top:5px}
+.m-wow{font-size:11px;font-weight:600;margin-top:4px}
+.m-rate{font-size:12px;font-weight:700;margin-top:4px}
+.wow-up{color:#0E9F6E}.wow-dn{color:#EF4444}.wow-flat{color:var(--muted)}
+.divider{border:none;border-top:1px solid var(--border);margin:16px 0}
+
+/* tabs */
+.tabs{display:flex;gap:4px;border-bottom:2px solid var(--border);margin-bottom:16px}
+.tab-btn{padding:8px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px;transition:.15s}
+.tab-btn.active{color:var(--primary);border-color:var(--primary)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+
+/* charts */
+.charts-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.chart-card{background:var(--card);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+.chart-card h4{font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:14px}
+.chart-wrap{position:relative;height:230px}
+.chart-wrap-lg{position:relative;height:280px}
+
+/* tables */
+.tbl-wrap{overflow-x:auto;border-radius:10px;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse;background:var(--card)}
+thead tr{background:linear-gradient(135deg,#1e3a5f,#1A56DB)}
+thead th{color:#fff;padding:10px 12px;text-align:left;font-size:12px;font-weight:700;white-space:nowrap}
+tbody tr{border-bottom:1px solid var(--border);transition:.12s}
+tbody tr:hover{background:#F9FAFB}
+tbody td{padding:9px 12px;font-size:12px;white-space:nowrap}
+.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.muted-cell{color:var(--muted)}
+.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
+.tag-ok{background:#D1FAE5;color:#065F46}
+.tag-warn{background:#FEF3C7;color:#92400E}
+.tag-delay{background:#FEE2E2;color:#991B1B}
+.tag-severe{background:#7F1D1D;color:#fff}
+.tag-shortage{background:#FCE7F3;color:#9D174D}
+.tag-kargo{background:#EBF5FB;color:#1A56DB}
+.tag-ansett{background:#F3E8FF;color:#7E3AF2}
+.tag-jigoo{background:#D1FAE5;color:#065F46}
+.tag-jimmy{background:#FEF3C7;color:#92400E}
+
+/* transit pills */
+.t-pills{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.t-pill{padding:10px 18px;border-radius:30px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px;cursor:pointer;transition:.15s}
+.t-pill:hover{filter:brightness(.95)}
+.t-pill .n{font-size:22px;font-weight:900}
+.pill-shortage{background:#FCE7F3;color:#9D174D}
+.pill-severe{background:#7F1D1D;color:#fff}
+.pill-delay{background:#FEE2E2;color:#991B1B}
+.pill-warn{background:#FEF3C7;color:#92400E}
+.pill-ok{background:#D1FAE5;color:#065F46}
+
+/* filter */
+.filter-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.filter-bar label{font-size:12px;color:var(--muted);font-weight:600}
+.filter-bar select,.filter-bar input{padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff}
+.btn{padding:6px 14px;border:1px solid var(--border);border-radius:8px;font-size:12px;cursor:pointer;font-weight:600}
+.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-reset{background:#fff;color:var(--muted)}
+
+/* wh */
+.wh-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.wh-card{background:var(--card);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+.wh-card h4{font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:14px}
+.wh-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #F3F4F6}
+.wh-name{width:84px;font-size:11px;color:#374151;flex-shrink:0;font-weight:600}
+.wh-bar-bg{flex:1;background:#F3F4F6;border-radius:4px;height:16px;overflow:hidden}
+.wh-bar-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:5px;font-size:10px;color:#fff;font-weight:700;min-width:20px}
+.wh-qty{width:44px;text-align:right;font-size:11px;font-weight:700;color:#374151}
+
+/* asin search */
+.asin-search-bar{display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap}
+.asin-search-bar input{flex:1;max-width:300px;padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-size:13px}
+.grain-toggle{display:flex;gap:4px;margin-left:auto}
+.grain-btn{padding:6px 14px;border:1px solid var(--border);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:#fff;color:var(--muted)}
+.grain-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+
+@media(max-width:900px){
+  .acct-grid,.charts-2,.wh-grid{grid-template-columns:1fr}
+  .qty-row{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <h1>📦 PO订单分析看板</h1>
+    <div style="color:rgba(255,255,255,.6);font-size:12px;margin-top:3px">Kargo（美国 VC）· Ansett（欧洲 VC）</div>
+  </div>
+  <div class="meta">数据截止 <span id="dataDate"></span> &nbsp;·&nbsp; 生成 <span id="genDate"></span></div>
+</div>
+
+<div class="main">
+
+<!-- ① 本周快报 -->
+<div class="section-title">本周快报</div>
+<div class="acct-grid">
+  <div class="acct-block">
+    <div class="acct-head">
+      <span class="dot dot-kargo"></span>
+      <h3>Kargo — 美国</h3>
+      <span class="week-badge" id="weekBadge1"></span>
+    </div>
+    <div class="card-section-lbl">本周</div>
+    <div class="qty-row" id="k-wk-qty"></div>
+    <div class="amt-row" id="k-wk-amt"></div>
+    <div class="divider"></div>
+    <div class="card-section-lbl">历史累计</div>
+    <div class="qty-row" id="k-tot-qty"></div>
+    <div class="amt-row" id="k-tot-amt"></div>
+  </div>
+  <div class="acct-block">
+    <div class="acct-head">
+      <span class="dot dot-ansett"></span>
+      <h3>Ansett — 欧洲</h3>
+      <span class="week-badge" id="weekBadge2"></span>
+    </div>
+    <div class="card-section-lbl">本周</div>
+    <div class="qty-row" id="a-wk-qty"></div>
+    <div class="amt-row" id="a-wk-amt"></div>
+    <div class="divider"></div>
+    <div class="card-section-lbl">历史累计</div>
+    <div class="qty-row" id="a-tot-qty"></div>
+    <div class="amt-row" id="a-tot-amt"></div>
+  </div>
+</div>
+
+<!-- ② 月度趋势 -->
+<div class="section-title">月度趋势</div>
+<div class="tabs" id="monthlyTabs">
+  <button class="tab-btn active" onclick="switchTab('monthly','m-kargo')">Kargo</button>
+  <button class="tab-btn" onclick="switchTab('monthly','m-ansett')">Ansett</button>
+</div>
+<div id="m-kargo" class="tab-panel active">
+  <div class="charts-2">
+    <div class="chart-card"><h4>Kargo — JIGOO 月度采购量 / 接单量</h4><div class="chart-wrap"><canvas id="cKJ"></canvas></div></div>
+    <div class="chart-card"><h4>Kargo — Jimmy 月度采购量 / 接单量</h4><div class="chart-wrap"><canvas id="cKJm"></canvas></div></div>
+  </div>
+</div>
+<div id="m-ansett" class="tab-panel">
+  <div class="charts-2">
+    <div class="chart-card"><h4>Ansett — JIGOO 月度采购量 / 接单量</h4><div class="chart-wrap"><canvas id="cAJ"></canvas></div></div>
+    <div class="chart-card"><h4>Ansett — Jimmy 月度采购量 / 接单量</h4><div class="chart-wrap"><canvas id="cAJm"></canvas></div></div>
+  </div>
+</div>
+
+<!-- ③ 周度趋势 -->
+<div class="section-title">周度趋势</div>
+<div class="tabs" id="weeklyTabs">
+  <button class="tab-btn active" onclick="switchTab('weekly','w-kargo')">Kargo</button>
+  <button class="tab-btn" onclick="switchTab('weekly','w-ansett')">Ansett</button>
+</div>
+<div id="w-kargo" class="tab-panel active">
+  <div class="charts-2">
+    <div class="chart-card"><h4>Kargo — 周度采购量 / 接单量</h4><div class="chart-wrap-lg"><canvas id="wKQty"></canvas></div></div>
+    <div class="chart-card"><h4>Kargo — 周度采购金额 / 接单金额（USD）</h4><div class="chart-wrap-lg"><canvas id="wKAmt"></canvas></div></div>
+  </div>
+</div>
+<div id="w-ansett" class="tab-panel">
+  <div class="charts-2">
+    <div class="chart-card"><h4>Ansett — 周度采购量 / 接单量</h4><div class="chart-wrap-lg"><canvas id="wAQty"></canvas></div></div>
+    <div class="chart-card"><h4>Ansett — 周度采购金额 / 接单金额（EUR）</h4><div class="chart-wrap-lg"><canvas id="wAAmt"></canvas></div></div>
+  </div>
+</div>
+
+<!-- ④ ASIN下单趋势 -->
+<div class="section-title">ASIN 下单趋势</div>
+<div class="asin-search-bar">
+  <label style="font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap">搜索ASIN</label>
+  <input id="asinInput" placeholder="输入 ASIN 后回车或点击搜索…" onkeydown="if(event.key==='Enter')searchAsin()">
+  <button class="btn btn-primary" onclick="searchAsin()">搜索</button>
+  <button class="btn btn-reset" onclick="resetAsinSearch()">重置</button>
+  <div class="grain-toggle">
+    <button class="grain-btn active" id="grainW" onclick="setGrain('week')">按周</button>
+    <button class="grain-btn" id="grainM" onclick="setGrain('month')">按月</button>
+  </div>
+</div>
+<div class="tabs" id="asinTrendTabs">
+  <button class="tab-btn active" onclick="switchAsinTab('at-kargo')">Kargo Top5</button>
+  <button class="tab-btn" onclick="switchAsinTab('at-ansett')">Ansett Top5</button>
+  <button class="tab-btn" id="at-search-tab" style="display:none" onclick="switchAsinTab('at-search')">搜索结果</button>
+</div>
+<div id="at-kargo"  class="tab-panel active"><div class="charts-2" id="kargoTop5Charts"></div></div>
+<div id="at-ansett" class="tab-panel"><div class="charts-2" id="ansettTop5Charts"></div></div>
+<div id="at-search" class="tab-panel">
+  <div class="chart-card"><h4 id="searchChartTitle">ASIN 下单趋势</h4><div class="chart-wrap-lg"><canvas id="cSearch"></canvas></div></div>
+</div>
+
+<!-- ⑤ ASIN历史汇总 -->
+<div class="section-title">ASIN 历史汇总</div>
+<div class="filter-bar">
+  <label>账号</label>
+  <select id="asinAcct" onchange="renderAsinTable()">
+    <option value="">全部</option><option value="Kargo">Kargo</option><option value="Ansett">Ansett</option>
+  </select>
+  <label>品牌</label>
+  <select id="asinBrand" onchange="renderAsinTable()">
+    <option value="">全部</option><option value="JIGOO">JIGOO</option><option value="Jimmy">Jimmy</option>
+  </select>
+  <button class="btn btn-reset" onclick="document.getElementById('asinAcct').value='';document.getElementById('asinBrand').value='';renderAsinTable()">重置</button>
+</div>
+<div class="tbl-wrap"><table>
+<thead><tr>
+  <th>账号</th><th>品牌</th><th>ASIN</th><th>商品标题</th>
+  <th>PO数</th><th>采购量</th><th>接单量</th><th>发货量</th><th>接收量</th>
+  <th>接单率</th><th>发货率</th><th>接收率</th><th>采购金额</th><th>接单金额</th>
+</tr></thead>
+<tbody id="asinTbody"></tbody></table></div>
+
+<!-- ⑥ 目的地仓库 -->
+<div class="section-title">目的地仓库分布</div>
+<div class="wh-grid">
+  <div class="wh-card"><h4>🇺🇸 Kargo — 美国亚马逊仓 Top 15</h4><div id="kargoWh"></div></div>
+  <div class="wh-card"><h4>🇪🇺 Ansett — 欧洲亚马逊仓 Top 15</h4><div id="ansettWh"></div></div>
+</div>
+
+<!-- ⑦ 在途监控 -->
+<div class="section-title">在途订单监控</div>
+<div class="t-pills" id="tPills"></div>
+<div class="filter-bar">
+  <label>账号</label>
+  <select id="trAcct" onchange="renderTransit()">
+    <option value="">全部</option><option value="Kargo">Kargo</option><option value="Ansett">Ansett</option>
+  </select>
+  <label>异常等级</label>
+  <select id="trLevel" onchange="renderTransit()">
+    <option value="">全部</option>
+    <option value="可能存在短缺">可能存在短缺</option>
+    <option value="严重延迟">严重延迟</option>
+    <option value="延迟">延迟</option>
+    <option value="偏长">偏长</option>
+    <option value="正常">正常</option>
+  </select>
+  <button class="btn btn-reset" onclick="document.getElementById('trAcct').value='';document.getElementById('trLevel').value='';renderTransit()">重置</button>
+</div>
+<div class="tbl-wrap"><table>
+<thead><tr>
+  <th>账号</th><th>品牌</th><th>ASIN</th><th>PO号</th>
+  <th>路线</th><th>目的仓</th><th>发货日期</th>
+  <th>在途天数</th><th>基准天数</th><th>异常等级</th>
+  <th>发货量</th><th>已收量</th><th>待收量</th>
+</tr></thead>
+<tbody id="transitTbody"></tbody></table></div>
+
+</div>
+
+<script>
+const DASH = {"generated": "2026-06-15", "data_date": "2026-06-15", "latest_week": "2026-W25", "prev_week": "2026-W24", "week_year": "2026", "week_start": "06/15", "week_end": "06/21", "all_weeks": ["2026-W08", "2026-W09", "2026-W10", "2026-W11", "2026-W12", "2026-W13", "2026-W14", "2026-W15", "2026-W16", "2026-W17", "2026-W18", "2026-W19", "2026-W20", "2026-W21", "2026-W22", "2026-W23", "2026-W24", "2026-W25"], "all_months": ["2026-02", "2026-03", "2026-04", "2026-05", "2026-06"], "cards": {"Kargo": {"week": {"req": 0, "acc": 0, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 0, "acc_amt": 0, "acc_rate": 0, "ship_rate": 0, "recv_rate": 0, "po_count": 0}, "prev_week": {"req": 188.0, "acc": 188.0, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 16961.36, "acc_amt": 16961.36, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 3}, "wow": {"req_wow": -188.0, "req_wow_pct": -100.0, "acc_wow": -188.0, "acc_wow_pct": -100.0, "ship_wow": 0, "ship_wow_pct": null, "recv_wow": 0, "recv_wow_pct": null, "req_amt_wow": -16961.36, "req_amt_wow_pct": -100.0, "acc_amt_wow": -16961.36, "acc_amt_wow_pct": -100.0}, "total": {"req": 3088.0, "acc": 2920.0, "ship": 2732.0, "recv": 2256.0, "cancel": 233.0, "req_amt": 309693.08, "acc_amt": 291923.84, "acc_rate": 94.6, "ship_rate": 93.6, "recv_rate": 82.6, "po_count": 255}, "currency": "USD"}, "Ansett": {"week": {"req": 1165, "acc": 1153, "ship": 360, "recv": 0, "cancel": 0, "req_amt": 116098.61, "acc_amt": 114694.67, "acc_rate": 99.0, "ship_rate": 31.2, "recv_rate": 0.0, "po_count": 18}, "prev_week": {"req": 1262, "acc": 1246, "ship": 1262, "recv": 40, "cancel": 0, "req_amt": 120833.84, "acc_amt": 119054.32, "acc_rate": 98.7, "ship_rate": 101.3, "recv_rate": 3.2, "po_count": 33}, "wow": {"req_wow": -97, "req_wow_pct": -7.7, "acc_wow": -93, "acc_wow_pct": -7.5, "ship_wow": -902, "ship_wow_pct": -71.5, "recv_wow": -40, "recv_wow_pct": -100.0, "req_amt_wow": -4735.23, "req_amt_wow_pct": -3.9, "acc_amt_wow": -4359.65, "acc_amt_wow_pct": -3.7}, "total": {"req": 6462, "acc": 6409, "ship": 5637, "recv": 3586, "cancel": 41, "req_amt": 667179.0, "acc_amt": 660970.54, "acc_rate": 99.2, "ship_rate": 88.0, "recv_rate": 63.6, "po_count": 176}, "currency": "EUR"}}, "weekly_by_acct": {"Kargo": [{"week": "2026-W09", "req": 492.0, "acc": 492.0, "ship": 492.0, "recv": 263.0, "cancel": 233.0, "req_amt": 50380.8, "acc_amt": 50380.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 53.5, "po_count": 44}, {"week": "2026-W12", "req": 4.0, "acc": 4.0, "ship": 4.0, "recv": 4.0, "cancel": 0, "req_amt": 487.08, "acc_amt": 487.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W14", "req": 348.0, "acc": 216.0, "ship": 216.0, "recv": 216.0, "cancel": 0, "req_amt": 42375.96, "acc_amt": 26302.32, "acc_rate": 62.1, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 40}, {"week": "2026-W16", "req": 160.0, "acc": 160.0, "ship": 160.0, "recv": 160.0, "cancel": 0, "req_amt": 14435.2, "acc_amt": 14435.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W17", "req": 500.0, "acc": 500.0, "ship": 500.0, "recv": 500.0, "cancel": 0, "req_amt": 51200.0, "acc_amt": 51200.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 30}, {"week": "2026-W20", "req": 328.0, "acc": 328.0, "ship": 328.0, "recv": 324.0, "cancel": 0, "req_amt": 38360.8, "acc_amt": 38360.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.8, "po_count": 33}, {"week": "2026-W21", "req": 564.0, "acc": 564.0, "ship": 564.0, "recv": 530.0, "cancel": 0, "req_amt": 48424.0, "acc_amt": 48424.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 94.0, "po_count": 57}, {"week": "2026-W22", "req": 476.0, "acc": 440.0, "ship": 440.0, "recv": 259.0, "cancel": 0, "req_amt": 43900.8, "acc_amt": 42205.2, "acc_rate": 92.4, "ship_rate": 100.0, "recv_rate": 58.9, "po_count": 42}, {"week": "2026-W23", "req": 28.0, "acc": 28.0, "ship": 28.0, "recv": 0, "cancel": 0, "req_amt": 3167.08, "acc_amt": 3167.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}, {"week": "2026-W24", "req": 188.0, "acc": 188.0, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 16961.36, "acc_amt": 16961.36, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 3}], "Ansett": [{"week": "2026-W08", "req": 20, "acc": 0, "ship": 0, "recv": 0, "cancel": 20, "req_amt": 2420, "acc_amt": 0, "acc_rate": 0.0, "ship_rate": 0, "recv_rate": 0, "po_count": 3}, {"week": "2026-W09", "req": 20, "acc": 20, "ship": 20, "recv": 16, "cancel": 4, "req_amt": 2420, "acc_amt": 2420, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 80.0, "po_count": 3}, {"week": "2026-W10", "req": 32, "acc": 32, "ship": 32, "recv": 32, "cancel": 0, "req_amt": 3549.36, "acc_amt": 3549.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}, {"week": "2026-W11", "req": 56, "acc": 56, "ship": 56, "recv": 53, "cancel": 4, "req_amt": 6776, "acc_amt": 6776, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 94.6, "po_count": 3}, {"week": "2026-W12", "req": 4, "acc": 4, "ship": 4, "recv": 8, "cancel": 0, "req_amt": 484, "acc_amt": 484, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 200.0, "po_count": 1}, {"week": "2026-W13", "req": 16, "acc": 16, "ship": 16, "recv": 16, "cancel": 0, "req_amt": 1936, "acc_amt": 1936, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W14", "req": 24, "acc": 24, "ship": 24, "recv": 28, "cancel": 0, "req_amt": 2904, "acc_amt": 2904, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 116.7, "po_count": 3}, {"week": "2026-W15", "req": 32, "acc": 32, "ship": 32, "recv": 32, "cancel": 0, "req_amt": 3872, "acc_amt": 3872, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W16", "req": 196, "acc": 196, "ship": 196, "recv": 196, "cancel": 0, "req_amt": 21655.68, "acc_amt": 21655.68, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}, {"week": "2026-W17", "req": 152, "acc": 152, "ship": 152, "recv": 144, "cancel": 9, "req_amt": 17660.96, "acc_amt": 17660.96, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 94.7, "po_count": 11}, {"week": "2026-W18", "req": 280, "acc": 280, "ship": 280, "recv": 277, "cancel": 0, "req_amt": 26479.12, "acc_amt": 26479.12, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.9, "po_count": 18}, {"week": "2026-W19", "req": 548, "acc": 548, "ship": 548, "recv": 534, "cancel": 0, "req_amt": 61596.2, "acc_amt": 61596.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 97.4, "po_count": 13}, {"week": "2026-W20", "req": 84, "acc": 84, "ship": 84, "recv": 94, "cancel": 0, "req_amt": 8615.72, "acc_amt": 8615.72, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 111.9, "po_count": 7}, {"week": "2026-W21", "req": 260, "acc": 260, "ship": 260, "recv": 263, "cancel": 0, "req_amt": 28838.24, "acc_amt": 28838.24, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 101.2, "po_count": 8}, {"week": "2026-W22", "req": 796, "acc": 791, "ship": 796, "recv": 780, "cancel": 4, "req_amt": 80797.32, "acc_amt": 80192.32, "acc_rate": 99.4, "ship_rate": 100.6, "recv_rate": 98.0, "po_count": 19}, {"week": "2026-W23", "req": 1515, "acc": 1515, "ship": 1515, "recv": 1073, "cancel": 0, "req_amt": 160241.95, "acc_amt": 160241.95, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 70.8, "po_count": 19}, {"week": "2026-W24", "req": 1262, "acc": 1246, "ship": 1262, "recv": 40, "cancel": 0, "req_amt": 120833.84, "acc_amt": 119054.32, "acc_rate": 98.7, "ship_rate": 101.3, "recv_rate": 3.2, "po_count": 33}, {"week": "2026-W25", "req": 1165, "acc": 1153, "ship": 360, "recv": 0, "cancel": 0, "req_amt": 116098.61, "acc_amt": 114694.67, "acc_rate": 99.0, "ship_rate": 31.2, "recv_rate": 0.0, "po_count": 18}]}, "monthly": {"Kargo-JIGOO": [{"month": "2026-05", "req": 968.0, "acc": 932.0, "ship": 932.0, "recv": 718.0, "cancel": 0, "req_amt": 78982.8, "acc_amt": 77287.2, "acc_rate": 96.3, "ship_rate": 100.0, "recv_rate": 77.0, "po_count": 80}], "Kargo-Jimmy": [{"month": "2026-03", "req": 496.0, "acc": 496.0, "ship": 496.0, "recv": 267.0, "cancel": 233.0, "req_amt": 50867.88, "acc_amt": 50867.88, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 53.8, "po_count": 45}, {"month": "2026-04", "req": 1008.0, "acc": 876.0, "ship": 876.0, "recv": 876.0, "cancel": 0, "req_amt": 108011.16, "acc_amt": 91937.52, "acc_rate": 86.9, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 73}, {"month": "2026-05", "req": 400.0, "acc": 400.0, "ship": 400.0, "recv": 395.0, "cancel": 0, "req_amt": 51702.8, "acc_amt": 51702.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.8, "po_count": 65}, {"month": "2026-06", "req": 216.0, "acc": 216.0, "ship": 28.0, "recv": 0, "cancel": 0, "req_amt": 20128.44, "acc_amt": 20128.44, "acc_rate": 100.0, "ship_rate": 13.0, "recv_rate": 0.0, "po_count": 5}], "Ansett-JIGOO": [{"month": "2026-03", "req": 8, "acc": 8, "ship": 8, "recv": 8, "cancel": 0, "req_amt": 645.36, "acc_amt": 645.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"month": "2026-04", "req": 496, "acc": 496, "ship": 496, "recv": 492, "cancel": 5, "req_amt": 49823.76, "acc_amt": 49823.76, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 99.2, "po_count": 27}, {"month": "2026-05", "req": 1364, "acc": 1364, "ship": 1364, "recv": 1362, "cancel": 0, "req_amt": 140643.48, "acc_amt": 140643.48, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 99.9, "po_count": 36}, {"month": "2026-06", "req": 3200, "acc": 3184, "ship": 2680, "recv": 979, "cancel": 0, "req_amt": 310156.12, "acc_amt": 308376.6, "acc_rate": 99.5, "ship_rate": 84.2, "recv_rate": 36.5, "po_count": 59}], "Ansett-Jimmy": [{"month": "2026-02", "req": 40, "acc": 20, "ship": 20, "recv": 16, "cancel": 24, "req_amt": 4840, "acc_amt": 2420, "acc_rate": 50.0, "ship_rate": 100.0, "recv_rate": 80.0, "po_count": 6}, {"month": "2026-03", "req": 124, "acc": 124, "ship": 124, "recv": 129, "cancel": 4, "req_amt": 15004, "acc_amt": 15004, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 104.0, "po_count": 14}, {"month": "2026-04", "req": 164, "acc": 164, "ship": 164, "recv": 157, "cancel": 4, "req_amt": 19844, "acc_amt": 19844, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 95.7, "po_count": 13}, {"month": "2026-05", "req": 324, "acc": 319, "ship": 324, "recv": 309, "cancel": 4, "req_amt": 39204, "acc_amt": 38599, "acc_rate": 98.5, "ship_rate": 101.6, "recv_rate": 95.4, "po_count": 18}, {"month": "2026-06", "req": 742, "acc": 730, "ship": 457, "recv": 134, "cancel": 0, "req_amt": 87018.28, "acc_amt": 85614.34, "acc_rate": 98.4, "ship_rate": 62.6, "recv_rate": 29.3, "po_count": 33}]}, "top5": {"Kargo": ["B0BP6HQ38B", "B0F65XP5NZ", "B0CPDXHHR2", "B0DKF6V2CV", "B0CS91TBNM"], "Ansett": ["B0CKTKBSP8", "B09YH9MM1J", "B0CJ9FL94H", "B0CKYLGK1Z", "B0CRYVZZH1"]}, "asin_weekly": {"B0F65XP5NZ": [{"week": "2026-W12", "req": 4.0, "acc": 4.0, "ship": 4.0, "recv": 4.0, "cancel": 0, "req_amt": 487.08, "acc_amt": 487.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W14", "req": 348.0, "acc": 216.0, "ship": 216.0, "recv": 216.0, "cancel": 0, "req_amt": 42375.96, "acc_amt": 26302.32, "acc_rate": 62.1, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 40}, {"week": "2026-W20", "req": 300.0, "acc": 300.0, "ship": 300.0, "recv": 296.0, "cancel": 0, "req_amt": 36531.0, "acc_amt": 36531.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.7, "po_count": 32}], "B0CPDXHHR2": [{"week": "2026-W16", "req": 160.0, "acc": 160.0, "ship": 160.0, "recv": 160.0, "cancel": 0, "req_amt": 14435.2, "acc_amt": 14435.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W24", "req": 188.0, "acc": 188.0, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 16961.36, "acc_amt": 16961.36, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 3}], "B0D9VVTNPR": [{"week": "2026-W21", "req": 60.0, "acc": 60.0, "ship": 60.0, "recv": 60.0, "cancel": 0, "req_amt": 6786.6, "acc_amt": 6786.6, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 13}, {"week": "2026-W22", "req": 20.0, "acc": 20.0, "ship": 20.0, "recv": 20.0, "cancel": 0, "req_amt": 2262.2, "acc_amt": 2262.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W23", "req": 28.0, "acc": 28.0, "ship": 28.0, "recv": 0, "cancel": 0, "req_amt": 3167.08, "acc_amt": 3167.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}], "B0CS91TBNM": [{"week": "2026-W20", "req": 28.0, "acc": 28.0, "ship": 28.0, "recv": 28.0, "cancel": 0, "req_amt": 1829.8, "acc_amt": 1829.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W21", "req": 220.0, "acc": 220.0, "ship": 220.0, "recv": 220.0, "cancel": 0, "req_amt": 14377.0, "acc_amt": 14377.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}], "B0DKF6V2CV": [{"week": "2026-W21", "req": 84.0, "acc": 84.0, "ship": 84.0, "recv": 54.0, "cancel": 0, "req_amt": 3956.4, "acc_amt": 3956.4, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 64.3, "po_count": 3}, {"week": "2026-W22", "req": 196.0, "acc": 160.0, "ship": 160.0, "recv": 12.0, "cancel": 0, "req_amt": 9231.6, "acc_amt": 7536.0, "acc_rate": 81.6, "ship_rate": 100.0, "recv_rate": 7.5, "po_count": 2}], "B09YH9MM1J": [{"week": "2026-W08", "req": 20, "acc": 0, "ship": 0, "recv": 0, "cancel": 20, "req_amt": 2420, "acc_amt": 0, "acc_rate": 0.0, "ship_rate": 0, "recv_rate": 0, "po_count": 3}, {"week": "2026-W09", "req": 20, "acc": 20, "ship": 20, "recv": 16, "cancel": 4, "req_amt": 2420, "acc_amt": 2420, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 80.0, "po_count": 3}, {"week": "2026-W10", "req": 24, "acc": 24, "ship": 24, "recv": 24, "cancel": 0, "req_amt": 2904, "acc_amt": 2904, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W11", "req": 56, "acc": 56, "ship": 56, "recv": 53, "cancel": 4, "req_amt": 6776, "acc_amt": 6776, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 94.6, "po_count": 3}, {"week": "2026-W12", "req": 4, "acc": 4, "ship": 4, "recv": 8, "cancel": 0, "req_amt": 484, "acc_amt": 484, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 200.0, "po_count": 1}, {"week": "2026-W13", "req": 16, "acc": 16, "ship": 16, "recv": 16, "cancel": 0, "req_amt": 1936, "acc_amt": 1936, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W14", "req": 24, "acc": 24, "ship": 24, "recv": 28, "cancel": 0, "req_amt": 2904, "acc_amt": 2904, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 116.7, "po_count": 3}, {"week": "2026-W15", "req": 32, "acc": 32, "ship": 32, "recv": 32, "cancel": 0, "req_amt": 3872, "acc_amt": 3872, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W16", "req": 4, "acc": 4, "ship": 4, "recv": 4, "cancel": 0, "req_amt": 484, "acc_amt": 484, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W17", "req": 116, "acc": 116, "ship": 116, "recv": 112, "cancel": 4, "req_amt": 14036, "acc_amt": 14036, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 96.6, "po_count": 6}, {"week": "2026-W18", "req": 12, "acc": 12, "ship": 12, "recv": 9, "cancel": 0, "req_amt": 1452, "acc_amt": 1452, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 75.0, "po_count": 2}, {"week": "2026-W19", "req": 136, "acc": 136, "ship": 136, "recv": 136, "cancel": 0, "req_amt": 16456, "acc_amt": 16456, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 6}, {"week": "2026-W20", "req": 36, "acc": 36, "ship": 36, "recv": 36, "cancel": 0, "req_amt": 4356, "acc_amt": 4356, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W22", "req": 152, "acc": 147, "ship": 152, "recv": 137, "cancel": 4, "req_amt": 18392, "acc_amt": 17787, "acc_rate": 96.7, "ship_rate": 103.4, "recv_rate": 90.1, "po_count": 10}, {"week": "2026-W23", "req": 198, "acc": 198, "ship": 198, "recv": 120, "cancel": 0, "req_amt": 23958, "acc_amt": 23958, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 60.6, "po_count": 8}, {"week": "2026-W24", "req": 135, "acc": 135, "ship": 135, "recv": 0, "cancel": 0, "req_amt": 16335, "acc_amt": 16335, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 7}, {"week": "2026-W25", "req": 246, "acc": 237, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 29766, "acc_amt": 28677, "acc_rate": 96.3, "ship_rate": 0.0, "recv_rate": 0, "po_count": 6}], "B0CKYLGK1Z": [{"week": "2026-W17", "req": 16, "acc": 16, "ship": 16, "recv": 12, "cancel": 4, "req_amt": 1786.72, "acc_amt": 1786.72, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 75.0, "po_count": 3}, {"week": "2026-W18", "req": 64, "acc": 64, "ship": 64, "recv": 64, "cancel": 0, "req_amt": 7123.84, "acc_amt": 7123.84, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}, {"week": "2026-W19", "req": 68, "acc": 68, "ship": 68, "recv": 54, "cancel": 0, "req_amt": 7567.72, "acc_amt": 7567.72, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 79.4, "po_count": 5}, {"week": "2026-W21", "req": 80, "acc": 80, "ship": 80, "recv": 80, "cancel": 0, "req_amt": 8894.4, "acc_amt": 8894.4, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W22", "req": 124, "acc": 124, "ship": 124, "recv": 124, "cancel": 0, "req_amt": 13842.76, "acc_amt": 13842.76, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 9}, {"week": "2026-W23", "req": 204, "acc": 204, "ship": 204, "recv": 188, "cancel": 0, "req_amt": 22803.8, "acc_amt": 22803.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 92.2, "po_count": 4}, {"week": "2026-W24", "req": 192, "acc": 192, "ship": 192, "recv": 20, "cancel": 0, "req_amt": 21374.4, "acc_amt": 21374.4, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 10.4, "po_count": 8}, {"week": "2026-W25", "req": 76, "acc": 76, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 8464.88, "acc_amt": 8464.88, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 4}], "B0CKTKBSP8": [{"week": "2026-W16", "req": 188, "acc": 188, "ship": 188, "recv": 188, "cancel": 0, "req_amt": 20856.72, "acc_amt": 20856.72, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W17", "req": 8, "acc": 8, "ship": 8, "recv": 8, "cancel": 1, "req_amt": 893.36, "acc_amt": 893.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W18", "req": 52, "acc": 52, "ship": 52, "recv": 52, "cancel": 0, "req_amt": 5788.12, "acc_amt": 5788.12, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W19", "req": 304, "acc": 304, "ship": 304, "recv": 304, "cancel": 0, "req_amt": 33832.16, "acc_amt": 33832.16, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W20", "req": 4, "acc": 4, "ship": 4, "recv": 4, "cancel": 0, "req_amt": 445.76, "acc_amt": 445.76, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W21", "req": 152, "acc": 152, "ship": 152, "recv": 152, "cancel": 0, "req_amt": 16899.36, "acc_amt": 16899.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"week": "2026-W22", "req": 224, "acc": 224, "ship": 224, "recv": 227, "cancel": 0, "req_amt": 25011.48, "acc_amt": 25011.48, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 101.3, "po_count": 7}, {"week": "2026-W23", "req": 720, "acc": 720, "ship": 720, "recv": 719, "cancel": 0, "req_amt": 80464.8, "acc_amt": 80464.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 99.9, "po_count": 7}, {"week": "2026-W24", "req": 368, "acc": 352, "ship": 368, "recv": 20, "cancel": 0, "req_amt": 41009.6, "acc_amt": 39230.08, "acc_rate": 95.7, "ship_rate": 104.5, "recv_rate": 5.4, "po_count": 16}, {"week": "2026-W25", "req": 428, "acc": 428, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 47676.28, "acc_amt": 47676.28, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 7}], "B0CH318L1J": [{"week": "2026-W22", "req": 200.0, "acc": 200.0, "ship": 200.0, "recv": 184.0, "cancel": 0, "req_amt": 23304.0, "acc_amt": 23304.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 92.0, "po_count": 33}], "B0D5LDYQFZ": [{"week": "2026-W19", "req": 16, "acc": 16, "ship": 16, "recv": 16, "cancel": 0, "req_amt": 1819.68, "acc_amt": 1819.68, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W20", "req": 4, "acc": 4, "ship": 4, "recv": 4, "cancel": 0, "req_amt": 454.92, "acc_amt": 454.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W21", "req": 4, "acc": 4, "ship": 4, "recv": 7, "cancel": 0, "req_amt": 454.92, "acc_amt": 454.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 175.0, "po_count": 1}, {"week": "2026-W23", "req": 8, "acc": 8, "ship": 8, "recv": 0, "cancel": 0, "req_amt": 909.84, "acc_amt": 909.84, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}, {"week": "2026-W24", "req": 24, "acc": 24, "ship": 24, "recv": 0, "cancel": 0, "req_amt": 2729.52, "acc_amt": 2729.52, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}], "B0CJ9FL94H": [{"week": "2026-W16", "req": 4, "acc": 4, "ship": 4, "recv": 4, "cancel": 0, "req_amt": 314.96, "acc_amt": 314.96, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W17", "req": 12, "acc": 12, "ship": 12, "recv": 12, "cancel": 0, "req_amt": 944.88, "acc_amt": 944.88, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W18", "req": 76, "acc": 76, "ship": 76, "recv": 76, "cancel": 0, "req_amt": 5984.24, "acc_amt": 5984.24, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 4}, {"week": "2026-W19", "req": 8, "acc": 8, "ship": 8, "recv": 8, "cancel": 0, "req_amt": 629.92, "acc_amt": 629.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W21", "req": 4, "acc": 4, "ship": 4, "recv": 4, "cancel": 0, "req_amt": 314.96, "acc_amt": 314.96, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W22", "req": 156, "acc": 156, "ship": 156, "recv": 156, "cancel": 0, "req_amt": 12257.28, "acc_amt": 12257.28, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W23", "req": 232, "acc": 232, "ship": 232, "recv": 32, "cancel": 0, "req_amt": 18224.08, "acc_amt": 18224.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 13.8, "po_count": 5}, {"week": "2026-W24", "req": 240, "acc": 240, "ship": 240, "recv": 0, "cancel": 0, "req_amt": 18810.4, "acc_amt": 18810.4, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 10}, {"week": "2026-W25", "req": 216, "acc": 216, "ship": 216, "recv": 0, "cancel": 0, "req_amt": 16990.4, "acc_amt": 16990.4, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 6}], "B08BLTZQ7R": [{"week": "2026-W23", "req": 61, "acc": 61, "ship": 61, "recv": 14, "cancel": 0, "req_amt": 6327.55, "acc_amt": 6327.55, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 23.0, "po_count": 10}, {"week": "2026-W24", "req": 63, "acc": 63, "ship": 63, "recv": 0, "cancel": 0, "req_amt": 6544.44, "acc_amt": 6544.44, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 9}, {"week": "2026-W25", "req": 39, "acc": 36, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 4087.29, "acc_amt": 3772.35, "acc_rate": 92.3, "ship_rate": 0.0, "recv_rate": 0, "po_count": 6}], "B0CRYVZZH1": [{"week": "2026-W10", "req": 8, "acc": 8, "ship": 8, "recv": 8, "cancel": 0, "req_amt": 645.36, "acc_amt": 645.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W18", "req": 76, "acc": 76, "ship": 76, "recv": 76, "cancel": 0, "req_amt": 6130.92, "acc_amt": 6130.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}, {"week": "2026-W19", "req": 16, "acc": 16, "ship": 16, "recv": 16, "cancel": 0, "req_amt": 1290.72, "acc_amt": 1290.72, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W20", "req": 36, "acc": 36, "ship": 36, "recv": 46, "cancel": 0, "req_amt": 2904.12, "acc_amt": 2904.12, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 127.8, "po_count": 3}, {"week": "2026-W22", "req": 140, "acc": 140, "ship": 140, "recv": 136, "cancel": 0, "req_amt": 11293.8, "acc_amt": 11293.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 97.1, "po_count": 2}, {"week": "2026-W23", "req": 88, "acc": 88, "ship": 88, "recv": 0, "cancel": 0, "req_amt": 7098.96, "acc_amt": 7098.96, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}, {"week": "2026-W24", "req": 52, "acc": 52, "ship": 52, "recv": 0, "cancel": 0, "req_amt": 4194.84, "acc_amt": 4194.84, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}, {"week": "2026-W25", "req": 8, "acc": 8, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 645.36, "acc_amt": 645.36, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 1}], "B0DYV287SZ": [{"week": "2026-W22", "req": 20.0, "acc": 20.0, "ship": 20.0, "recv": 19.0, "cancel": 0, "req_amt": 6123.0, "acc_amt": 6123.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 95.0, "po_count": 16}], "B0BP6HQ38B": [{"week": "2026-W09", "req": 492.0, "acc": 492.0, "ship": 492.0, "recv": 263.0, "cancel": 233.0, "req_amt": 50380.8, "acc_amt": 50380.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 53.5, "po_count": 44}, {"week": "2026-W17", "req": 500.0, "acc": 500.0, "ship": 500.0, "recv": 500.0, "cancel": 0, "req_amt": 51200.0, "acc_amt": 51200.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 30}], "B0GWD94VPC": [{"week": "2026-W20", "req": 4, "acc": 4, "ship": 4, "recv": 4, "cancel": 0, "req_amt": 454.92, "acc_amt": 454.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"week": "2026-W21", "req": 20, "acc": 20, "ship": 20, "recv": 20, "cancel": 0, "req_amt": 2274.6, "acc_amt": 2274.6, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"week": "2026-W23", "req": 4, "acc": 4, "ship": 4, "recv": 0, "cancel": 0, "req_amt": 454.92, "acc_amt": 454.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 1}, {"week": "2026-W25", "req": 8, "acc": 8, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 909.84, "acc_amt": 909.84, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 1}], "B0CH2ZQZLV": [{"week": "2026-W21", "req": 200.0, "acc": 200.0, "ship": 200.0, "recv": 196.0, "cancel": 0, "req_amt": 23304.0, "acc_amt": 23304.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.0, "po_count": 36}], "B0GF2LWFRB": [{"week": "2026-W22", "req": 40.0, "acc": 40.0, "ship": 40.0, "recv": 24.0, "cancel": 0, "req_amt": 2980.0, "acc_amt": 2980.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 60.0, "po_count": 8}], "B0DKY6RQRC": [{"week": "2026-W24", "req": 188, "acc": 188, "ship": 188, "recv": 0, "cancel": 0, "req_amt": 9835.64, "acc_amt": 9835.64, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 8}, {"week": "2026-W25", "req": 144, "acc": 144, "ship": 144, "recv": 0, "cancel": 0, "req_amt": 7558.56, "acc_amt": 7558.56, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 3}]}, "asin_monthly": {"B0F65XP5NZ": [{"month": "2026-03", "req": 4.0, "acc": 4.0, "ship": 4.0, "recv": 4.0, "cancel": 0, "req_amt": 487.08, "acc_amt": 487.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 1}, {"month": "2026-04", "req": 348.0, "acc": 216.0, "ship": 216.0, "recv": 216.0, "cancel": 0, "req_amt": 42375.96, "acc_amt": 26302.32, "acc_rate": 62.1, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 40}, {"month": "2026-05", "req": 300.0, "acc": 300.0, "ship": 300.0, "recv": 296.0, "cancel": 0, "req_amt": 36531.0, "acc_amt": 36531.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.7, "po_count": 32}], "B0CPDXHHR2": [{"month": "2026-04", "req": 160.0, "acc": 160.0, "ship": 160.0, "recv": 160.0, "cancel": 0, "req_amt": 14435.2, "acc_amt": 14435.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"month": "2026-06", "req": 188.0, "acc": 188.0, "ship": 0, "recv": 0, "cancel": 0, "req_amt": 16961.36, "acc_amt": 16961.36, "acc_rate": 100.0, "ship_rate": 0.0, "recv_rate": 0, "po_count": 3}], "B0D9VVTNPR": [{"month": "2026-05", "req": 80.0, "acc": 80.0, "ship": 80.0, "recv": 80.0, "cancel": 0, "req_amt": 9048.8, "acc_amt": 9048.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 17}, {"month": "2026-06", "req": 28.0, "acc": 28.0, "ship": 28.0, "recv": 0, "cancel": 0, "req_amt": 3167.08, "acc_amt": 3167.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 2}], "B0CS91TBNM": [{"month": "2026-05", "req": 248.0, "acc": 248.0, "ship": 248.0, "recv": 248.0, "cancel": 0, "req_amt": 16206.8, "acc_amt": 16206.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 6}], "B0DKF6V2CV": [{"month": "2026-05", "req": 280.0, "acc": 244.0, "ship": 244.0, "recv": 66.0, "cancel": 0, "req_amt": 13188.0, "acc_amt": 11492.4, "acc_rate": 87.1, "ship_rate": 100.0, "recv_rate": 27.0, "po_count": 5}], "B09YH9MM1J": [{"month": "2026-02", "req": 40, "acc": 20, "ship": 20, "recv": 16, "cancel": 24, "req_amt": 4840, "acc_amt": 2420, "acc_rate": 50.0, "ship_rate": 100.0, "recv_rate": 80.0, "po_count": 6}, {"month": "2026-03", "req": 124, "acc": 124, "ship": 124, "recv": 129, "cancel": 4, "req_amt": 15004, "acc_amt": 15004, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 104.0, "po_count": 14}, {"month": "2026-04", "req": 164, "acc": 164, "ship": 164, "recv": 157, "cancel": 4, "req_amt": 19844, "acc_amt": 19844, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 95.7, "po_count": 13}, {"month": "2026-05", "req": 324, "acc": 319, "ship": 324, "recv": 309, "cancel": 4, "req_amt": 39204, "acc_amt": 38599, "acc_rate": 98.5, "ship_rate": 101.6, "recv_rate": 95.4, "po_count": 18}, {"month": "2026-06", "req": 579, "acc": 570, "ship": 333, "recv": 120, "cancel": 0, "req_amt": 70059, "acc_amt": 68970, "acc_rate": 98.4, "ship_rate": 58.4, "recv_rate": 36.0, "po_count": 21}], "B0CKYLGK1Z": [{"month": "2026-04", "req": 80, "acc": 80, "ship": 80, "recv": 76, "cancel": 4, "req_amt": 8910.56, "acc_amt": 8910.56, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 95.0, "po_count": 8}, {"month": "2026-05", "req": 272, "acc": 272, "ship": 272, "recv": 258, "cancel": 0, "req_amt": 30304.88, "acc_amt": 30304.88, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 94.9, "po_count": 17}, {"month": "2026-06", "req": 472, "acc": 472, "ship": 396, "recv": 208, "cancel": 0, "req_amt": 52643.08, "acc_amt": 52643.08, "acc_rate": 100.0, "ship_rate": 83.9, "recv_rate": 52.5, "po_count": 16}], "B0CKTKBSP8": [{"month": "2026-04", "req": 248, "acc": 248, "ship": 248, "recv": 248, "cancel": 1, "req_amt": 27538.2, "acc_amt": 27538.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 9}, {"month": "2026-05", "req": 684, "acc": 684, "ship": 684, "recv": 687, "cancel": 0, "req_amt": 76188.76, "acc_amt": 76188.76, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.4, "po_count": 15}, {"month": "2026-06", "req": 1516, "acc": 1500, "ship": 1088, "recv": 739, "cancel": 0, "req_amt": 169150.68, "acc_amt": 167371.16, "acc_rate": 98.9, "ship_rate": 72.5, "recv_rate": 67.9, "po_count": 30}], "B0CH318L1J": [{"month": "2026-05", "req": 200.0, "acc": 200.0, "ship": 200.0, "recv": 184.0, "cancel": 0, "req_amt": 23304.0, "acc_amt": 23304.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 92.0, "po_count": 33}], "B0D5LDYQFZ": [{"month": "2026-05", "req": 24, "acc": 24, "ship": 24, "recv": 27, "cancel": 0, "req_amt": 2729.52, "acc_amt": 2729.52, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 112.5, "po_count": 4}, {"month": "2026-06", "req": 32, "acc": 32, "ship": 32, "recv": 0, "cancel": 0, "req_amt": 3639.36, "acc_amt": 3639.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 4}], "B0CJ9FL94H": [{"month": "2026-04", "req": 92, "acc": 92, "ship": 92, "recv": 92, "cancel": 0, "req_amt": 7244.08, "acc_amt": 7244.08, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 6}, {"month": "2026-05", "req": 168, "acc": 168, "ship": 168, "recv": 168, "cancel": 0, "req_amt": 13202.16, "acc_amt": 13202.16, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}, {"month": "2026-06", "req": 688, "acc": 688, "ship": 688, "recv": 32, "cancel": 0, "req_amt": 54024.88, "acc_amt": 54024.88, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 4.7, "po_count": 21}], "B08BLTZQ7R": [{"month": "2026-06", "req": 163, "acc": 160, "ship": 124, "recv": 14, "cancel": 0, "req_amt": 16959.28, "acc_amt": 16644.34, "acc_rate": 98.2, "ship_rate": 77.5, "recv_rate": 11.3, "po_count": 25}], "B0CRYVZZH1": [{"month": "2026-03", "req": 8, "acc": 8, "ship": 8, "recv": 8, "cancel": 0, "req_amt": 645.36, "acc_amt": 645.36, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 2}, {"month": "2026-04", "req": 76, "acc": 76, "ship": 76, "recv": 76, "cancel": 0, "req_amt": 6130.92, "acc_amt": 6130.92, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 5}, {"month": "2026-05", "req": 192, "acc": 192, "ship": 192, "recv": 198, "cancel": 0, "req_amt": 15488.64, "acc_amt": 15488.64, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 103.1, "po_count": 7}, {"month": "2026-06", "req": 148, "acc": 148, "ship": 140, "recv": 0, "cancel": 0, "req_amt": 11939.16, "acc_amt": 11939.16, "acc_rate": 100.0, "ship_rate": 94.6, "recv_rate": 0.0, "po_count": 5}], "B0DYV287SZ": [{"month": "2026-05", "req": 20.0, "acc": 20.0, "ship": 20.0, "recv": 19.0, "cancel": 0, "req_amt": 6123.0, "acc_amt": 6123.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 95.0, "po_count": 16}], "B0BP6HQ38B": [{"month": "2026-03", "req": 492.0, "acc": 492.0, "ship": 492.0, "recv": 263.0, "cancel": 233.0, "req_amt": 50380.8, "acc_amt": 50380.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 53.5, "po_count": 44}, {"month": "2026-04", "req": 500.0, "acc": 500.0, "ship": 500.0, "recv": 500.0, "cancel": 0, "req_amt": 51200.0, "acc_amt": 51200.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 30}], "B0GWD94VPC": [{"month": "2026-05", "req": 24, "acc": 24, "ship": 24, "recv": 24, "cancel": 0, "req_amt": 2729.52, "acc_amt": 2729.52, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 3}, {"month": "2026-06", "req": 12, "acc": 12, "ship": 4, "recv": 0, "cancel": 0, "req_amt": 1364.76, "acc_amt": 1364.76, "acc_rate": 100.0, "ship_rate": 33.3, "recv_rate": 0.0, "po_count": 2}], "B0CH2ZQZLV": [{"month": "2026-05", "req": 200.0, "acc": 200.0, "ship": 200.0, "recv": 196.0, "cancel": 0, "req_amt": 23304.0, "acc_amt": 23304.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.0, "po_count": 36}], "B0GF2LWFRB": [{"month": "2026-05", "req": 40.0, "acc": 40.0, "ship": 40.0, "recv": 24.0, "cancel": 0, "req_amt": 2980.0, "acc_amt": 2980.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 60.0, "po_count": 8}], "B0DKY6RQRC": [{"month": "2026-06", "req": 332, "acc": 332, "ship": 332, "recv": 0, "cancel": 0, "req_amt": 17394.2, "acc_amt": 17394.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 11}]}, "asin_info": {"B0CPDXHHR2": {"brand": "Jimmy", "account": "Kargo", "title": "Jimmy Mattress Vacuum Cleaner, Bed Vacuum Cleaner with UV-C "}, "B0D9VVTNPR": {"brand": "Jimmy", "account": "Kargo", "title": "Jimmy Mattress Vacuum Cleaner, Bed Vacuum Cleaner with UV Sa"}, "B0DKF6V2CV": {"brand": "JIGOO", "account": "Kargo", "title": "JIGOO Mattress Vacuum Cleaner UV Sanitizing, Anti-allergen B"}, "B0CH318L1J": {"brand": "JIGOO", "account": "Kargo", "title": "JIGOO T600 Mattress Vacuum Cleaner with UV-C Light, 15Kpa Su"}, "B0DYV287SZ": {"brand": "Jimmy", "account": "Kargo", "title": "JIMMY R9 Reverse Osmosis System Countertop Water Filter,7 St"}, "B0GF2LWFRB": {"brand": "JIGOO", "account": "Kargo", "title": "JIGOO Bed Vacuum Cleaner with Dust Sensor, Mattress Vacuum C"}, "B0CS91TBNM": {"brand": "JIGOO", "account": "Kargo", "title": "JIGOO J200 Improve Sleep Mattress Vacuum Cleaner Uv Sanitizi"}, "B0CH2ZQZLV": {"brand": "JIGOO", "account": "Kargo", "title": "JIGOO T600 Bed Vacuum Cleaner with UV-C Light, 15Kpa Suction"}, "B0F65XP5NZ": {"brand": "Jimmy", "account": "Kargo", "title": "Jimmy BX7 Pro Mattress Vacuum Cleaner, Bed Vacuum Cleaner wi"}, "B0BP6HQ38B": {"brand": "Jimmy", "account": "Kargo", "title": "Jimmy Mattress Vacuum Cleaner, Anti-allergen Bed Vacuum Clea"}, "B0CKTKBSP8": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO T600 Mite Vacuum Cleaner with UV Light & Hot Air [700W"}, "B09YH9MM1J": {"brand": "Jimmy", "account": "Ansett", "title": "Jimmy BX7 Pro Mite Vacuum Cleaner 700 W Powerful Mattress Cl"}, "B0CJ9FL94H": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO J300 Mite Vacuum Cleaner with Dust Mite Sensor and Int"}, "B08BLTZQ7R": {"brand": "Jimmy", "account": "Ansett", "title": "Jimmy JV35 Mite Vacuum Cleaner for Mattresses with UV-C Ligh"}, "B0CKYLGK1Z": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO T600 Mite Vacuum Cleaner with UV Light & Hot Air [700W"}, "B0DKY6RQRC": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO S100 Mite Vacuum Cleaner with UV Light & 55°C Hot Air:"}, "B0GWD94VPC": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO T600 Milbensauger für matratzen, 700W Milbenstaubsauge"}, "B0CRYVZZH1": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO J200 Mite Vacuum Cleaner for Mattresses with LED Displ"}, "B0D5LDYQFZ": {"brand": "JIGOO", "account": "Ansett", "title": "JIGOO T600 Mite Vacuum Cleaner for Mattresses, 700 W Mite Va"}}, "asin_table": [{"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "title": "Jimmy JV35 Mite Vacuum Cleaner for Mattresses with UV-C", "currency": "EUR", "req": 163, "acc": 160, "ship": 124, "recv": 14, "cancel": 0, "req_amt": 16959.28, "acc_amt": 16644.34, "acc_rate": 98.2, "ship_rate": 77.5, "recv_rate": 11.3, "po_count": 25}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "title": "Jimmy BX7 Pro Mite Vacuum Cleaner 700 W Powerful Mattre", "currency": "EUR", "req": 1231, "acc": 1197, "ship": 965, "recv": 731, "cancel": 36, "req_amt": 148951, "acc_amt": 144837, "acc_rate": 97.2, "ship_rate": 80.6, "recv_rate": 75.8, "po_count": 72}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "title": "JIGOO J300 Mite Vacuum Cleaner with Dust Mite Sensor an", "currency": "EUR", "req": 948, "acc": 948, "ship": 948, "recv": 292, "cancel": 0, "req_amt": 74471.12, "acc_amt": 74471.12, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 30.8, "po_count": 32}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "title": "JIGOO T600 Mite Vacuum Cleaner with UV Light & Hot Air ", "currency": "EUR", "req": 2448, "acc": 2432, "ship": 2020, "recv": 1674, "cancel": 1, "req_amt": 272877.64, "acc_amt": 271098.12, "acc_rate": 99.3, "ship_rate": 83.1, "recv_rate": 82.9, "po_count": 54}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "title": "JIGOO T600 Mite Vacuum Cleaner with UV Light & Hot Air ", "currency": "EUR", "req": 824, "acc": 824, "ship": 748, "recv": 542, "cancel": 4, "req_amt": 91858.52, "acc_amt": 91858.52, "acc_rate": 100.0, "ship_rate": 90.8, "recv_rate": 72.5, "po_count": 41}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CRYVZZH1", "title": "JIGOO J200 Mite Vacuum Cleaner for Mattresses with LED ", "currency": "EUR", "req": 424, "acc": 424, "ship": 416, "recv": 282, "cancel": 0, "req_amt": 34204.08, "acc_amt": 34204.08, "acc_rate": 100.0, "ship_rate": 98.1, "recv_rate": 67.8, "po_count": 19}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0D5LDYQFZ", "title": "JIGOO T600 Mite Vacuum Cleaner for Mattresses, 700 W Mi", "currency": "EUR", "req": 56, "acc": 56, "ship": 56, "recv": 27, "cancel": 0, "req_amt": 6368.88, "acc_amt": 6368.88, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 48.2, "po_count": 8}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "title": "JIGOO S100 Mite Vacuum Cleaner with UV Light & 55°C Hot", "currency": "EUR", "req": 332, "acc": 332, "ship": 332, "recv": 0, "cancel": 0, "req_amt": 17394.2, "acc_amt": 17394.2, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 0.0, "po_count": 11}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0GWD94VPC", "title": "JIGOO T600 Milbensauger für matratzen, 700W Milbenstaub", "currency": "EUR", "req": 36, "acc": 36, "ship": 28, "recv": 24, "cancel": 0, "req_amt": 4094.28, "acc_amt": 4094.28, "acc_rate": 100.0, "ship_rate": 77.8, "recv_rate": 85.7, "po_count": 5}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "title": "Jimmy Mattress Vacuum Cleaner, Anti-allergen Bed Vacuum", "currency": "USD", "req": 992.0, "acc": 992.0, "ship": 992.0, "recv": 763.0, "cancel": 233.0, "req_amt": 101580.8, "acc_amt": 101580.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 76.9, "po_count": 74}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH2ZQZLV", "title": "JIGOO T600 Bed Vacuum Cleaner with UV-C Light, 15Kpa Su", "currency": "USD", "req": 200.0, "acc": 200.0, "ship": 200.0, "recv": 196.0, "cancel": 0, "req_amt": 23304.0, "acc_amt": 23304.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 98.0, "po_count": 36}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH318L1J", "title": "JIGOO T600 Mattress Vacuum Cleaner with UV-C Light, 15K", "currency": "USD", "req": 200.0, "acc": 200.0, "ship": 200.0, "recv": 184.0, "cancel": 0, "req_amt": 23304.0, "acc_amt": 23304.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 92.0, "po_count": 33}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0CPDXHHR2", "title": "Jimmy Mattress Vacuum Cleaner, Bed Vacuum Cleaner with ", "currency": "USD", "req": 348.0, "acc": 348.0, "ship": 160.0, "recv": 160.0, "cancel": 0, "req_amt": 31396.56, "acc_amt": 31396.56, "acc_rate": 100.0, "ship_rate": 46.0, "recv_rate": 100.0, "po_count": 6}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CS91TBNM", "title": "JIGOO J200 Improve Sleep Mattress Vacuum Cleaner Uv San", "currency": "USD", "req": 248.0, "acc": 248.0, "ship": 248.0, "recv": 248.0, "cancel": 0, "req_amt": 16206.8, "acc_amt": 16206.8, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 100.0, "po_count": 6}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0D9VVTNPR", "title": "Jimmy Mattress Vacuum Cleaner, Bed Vacuum Cleaner with ", "currency": "USD", "req": 108.0, "acc": 108.0, "ship": 108.0, "recv": 80.0, "cancel": 0, "req_amt": 12215.88, "acc_amt": 12215.88, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 74.1, "po_count": 19}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0DKF6V2CV", "title": "JIGOO Mattress Vacuum Cleaner UV Sanitizing, Anti-aller", "currency": "USD", "req": 280.0, "acc": 244.0, "ship": 244.0, "recv": 66.0, "cancel": 0, "req_amt": 13188.0, "acc_amt": 11492.4, "acc_rate": 87.1, "ship_rate": 100.0, "recv_rate": 27.0, "po_count": 5}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0DYV287SZ", "title": "JIMMY R9 Reverse Osmosis System Countertop Water Filter", "currency": "USD", "req": 20.0, "acc": 20.0, "ship": 20.0, "recv": 19.0, "cancel": 0, "req_amt": 6123.0, "acc_amt": 6123.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 95.0, "po_count": 16}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0F65XP5NZ", "title": "Jimmy BX7 Pro Mattress Vacuum Cleaner, Bed Vacuum Clean", "currency": "USD", "req": 652.0, "acc": 520.0, "ship": 520.0, "recv": 516.0, "cancel": 0, "req_amt": 79394.04, "acc_amt": 63320.4, "acc_rate": 79.8, "ship_rate": 100.0, "recv_rate": 99.2, "po_count": 73}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0GF2LWFRB", "title": "JIGOO Bed Vacuum Cleaner with Dust Sensor, Mattress Vac", "currency": "USD", "req": 40.0, "acc": 40.0, "ship": 40.0, "recv": 24.0, "cancel": 0, "req_amt": 2980.0, "acc_amt": 2980.0, "acc_rate": 100.0, "ship_rate": 100.0, "recv_rate": 60.0, "po_count": 8}], "transit": [{"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "193ZH8GZ", "dest_wh": "CHO1(美东)", "route": "KARGO-CA(美西) → CHO1(美东)", "ship_qty": 4, "recv_qty": 2, "pending_qty": 2, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "1AHJHGKL", "dest_wh": "MKC4(美中)", "route": "KARGO-CA(美西) → MKC4(美中)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "1E72OOAP", "dest_wh": "DET1(美中)", "route": "KARGO-CA(美西) → DET1(美中)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "1SZ5IK5F", "dest_wh": "OKC2(美南)", "route": "KARGO-CA(美西) → OKC2(美南)", "ship_qty": 28, "recv_qty": 7, "pending_qty": 21, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "356R2NUK", "dest_wh": "LGB4(美西)", "route": "KARGO-CA(美西) → LGB4(美西)", "ship_qty": 28, "recv_qty": 4, "pending_qty": 24, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 7, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "371INRPZ", "dest_wh": "IND5(美中)", "route": "KARGO-CA(美西) → IND5(美中)", "ship_qty": 12, "recv_qty": 3, "pending_qty": 9, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "3AQ1UZFD", "dest_wh": "PHX5(美西)", "route": "KARGO-CA(美西) → PHX5(美西)", "ship_qty": 8, "recv_qty": 2, "pending_qty": 6, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 7, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "3B1SZRVG", "dest_wh": "FOE1(美中)", "route": "KARGO-CA(美西) → FOE1(美中)", "ship_qty": 12, "recv_qty": 7, "pending_qty": 5, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "3D7CQO7Y", "dest_wh": "DEN8(美西)", "route": "KARGO-CA(美西) → DEN8(美西)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 7, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "3N2P1SEB", "dest_wh": "MDT4(美东)", "route": "KARGO-CA(美西) → MDT4(美东)", "ship_qty": 12, "recv_qty": 3, "pending_qty": 9, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "3TDYKS6A", "dest_wh": "TPA2(美南)", "route": "KARGO-CA(美西) → TPA2(美南)", "ship_qty": 12, "recv_qty": 3, "pending_qty": 9, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "3YX9E4QT", "dest_wh": "JAX3(美南)", "route": "KARGO-CA(美西) → JAX3(美南)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "4859VMLD", "dest_wh": "JVL1(美中)", "route": "KARGO-CA(美西) → JVL1(美中)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "4WSOZMNW", "dest_wh": "CHA2(美南)", "route": "KARGO-CA(美西) → CHA2(美南)", "ship_qty": 12, "recv_qty": 3, "pending_qty": 9, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "4XKOQAUC", "dest_wh": "GEG2(美西)", "route": "KARGO-CA(美西) → GEG2(美西)", "ship_qty": 28, "recv_qty": 7, "pending_qty": 21, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 7, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "5EQB2GMB", "dest_wh": "MDW6(美中)", "route": "KARGO-CA(美西) → MDW6(美中)", "ship_qty": 12, "recv_qty": 3, "pending_qty": 9, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "5T36AGQO", "dest_wh": "LAS6(美西)", "route": "KARGO-CA(美西) → LAS6(美西)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 7, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "5UM5QS5A", "dest_wh": "STL4(美中)", "route": "KARGO-CA(美西) → STL4(美中)", "ship_qty": 4, "recv_qty": 2, "pending_qty": 2, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "457QF33F", "dest_wh": "PHL4(美东)", "route": "KARGO-CA(美西) → PHL4(美东)", "ship_qty": 16, "recv_qty": 4, "pending_qty": 12, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "4N94UAWW", "dest_wh": "DET2(美中)", "route": "KARGO-CA(美西) → DET2(美中)", "ship_qty": 4, "recv_qty": 1, "pending_qty": 3, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "4YNGLQIL", "dest_wh": "CMH3(美中)", "route": "KARGO-CA(美西) → CMH3(美中)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "53BYB11M", "dest_wh": "OAK3(美西)", "route": "KARGO-CA(美西) → OAK3(美西)", "ship_qty": 24, "recv_qty": 4, "pending_qty": 20, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 7, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "571HI8QQ", "dest_wh": "CMH2(美中)", "route": "KARGO-CA(美西) → CMH2(美中)", "ship_qty": 12, "recv_qty": 3, "pending_qty": 9, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "5GL2NKHQ", "dest_wh": "SAT1(美南)", "route": "KARGO-CA(美西) → SAT1(美南)", "ship_qty": 16, "recv_qty": 4, "pending_qty": 12, "ship_date": "2026-03-07", "transit_days": 99, "threshold": 14, "level": "可能存在短缺"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0BP6HQ38B", "po": "2ZDOCMPI", "dest_wh": "ABE4(美东)", "route": "KARGO-CA(美西) → ABE4(美东)", "ship_qty": 40, "recv_qty": 15, "pending_qty": 25, "ship_date": "2026-03-09", "transit_days": 97, "threshold": 14, "level": "可能存在短缺"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "49KGCJXW", "dest_wh": "WRO5", "route": "EU → WRO5", "ship_qty": 8, "recv_qty": 5, "pending_qty": 3, "ship_date": "2026-04-30", "transit_days": 46, "threshold": 10, "level": "可能存在短缺"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "3QKAO2EX", "dest_wh": "WRO5", "route": "EU → WRO5", "ship_qty": 24, "recv_qty": 10, "pending_qty": 14, "ship_date": "2026-05-07", "transit_days": 39, "threshold": 10, "level": "严重延迟"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0F65XP5NZ", "po": "288QX75G", "dest_wh": "PIT2(美东)", "route": "KARGO-CA(美西) → PIT2(美东)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-05-19", "transit_days": 26, "threshold": 14, "level": "偏长"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0DKF6V2CV", "po": "8PC5V1XA", "dest_wh": "TCY2(美西)", "route": "KARGO-CA02(美西) → TCY2(美西)", "ship_qty": 40, "recv_qty": 10, "pending_qty": 30, "ship_date": "2026-05-21", "transit_days": 24, "threshold": 7, "level": "严重延迟"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH2ZQZLV", "po": "3LIE24MB", "dest_wh": "ACY2(美东)", "route": "KARGOHR-NJ(美东) → ACY2(美东)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-05-26", "transit_days": 19, "threshold": 7, "level": "延迟"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "71YMY6XG", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 4, "recv_qty": 3, "pending_qty": 1, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "4DSYZOUD", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 12, "recv_qty": 10, "pending_qty": 2, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "5GHPAHQJ", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 40, "recv_qty": 38, "pending_qty": 2, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CRYVZZH1", "po": "5GHPAHQJ", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 88, "recv_qty": 84, "pending_qty": 4, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "4XZW6SZM", "dest_wh": "PRG2", "route": "EU → PRG2", "ship_qty": 12, "recv_qty": 11, "pending_qty": 1, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "4R33D9BH", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 4, "recv_qty": 3, "pending_qty": 1, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "57ECQ1QM", "dest_wh": "BRQ2", "route": "EU → BRQ2", "ship_qty": 16, "recv_qty": 12, "pending_qty": 4, "ship_date": "2026-05-28", "transit_days": 18, "threshold": 10, "level": "偏长"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH318L1J", "po": "7HO287LJ", "dest_wh": "SWF1(美东)", "route": "KARGO-CA02(美西) → SWF1(美东)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0GF2LWFRB", "po": "7HO287LJ", "dest_wh": "SWF1(美东)", "route": "KARGO-CA02(美西) → SWF1(美东)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH318L1J", "po": "1VTM72BB", "dest_wh": "HSV1(美南)", "route": "KARGO-CA02(美西) → HSV1(美南)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH318L1J", "po": "1DS8QTHK", "dest_wh": "IGQ2(美中)", "route": "KARGO-CA02(美西) → IGQ2(美中)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0GF2LWFRB", "po": "7JTKY3WB", "dest_wh": "TPA2(美南)", "route": "KARGO-CA02(美西) → TPA2(美南)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0GF2LWFRB", "po": "8G6SFPMM", "dest_wh": "SAT1(美南)", "route": "KARGO-CA02(美西) → SAT1(美南)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0GF2LWFRB", "po": "8KY3IDZZ", "dest_wh": "TEB6(美西)", "route": "KARGO-CA02(美西) → TEB6(美西)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 7, "level": "偏长"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0CH318L1J", "po": "1GPR8DZI", "dest_wh": "BNA2(美南)", "route": "KARGO-CA02(美西) → BNA2(美南)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0DYV287SZ", "po": "8PQDL2DM", "dest_wh": "OKC2(美南)", "route": "KARGO-CA02(美西) → OKC2(美南)", "ship_qty": 1, "recv_qty": 0, "pending_qty": 1, "ship_date": "2026-06-02", "transit_days": 12, "threshold": 14, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "1TZYSGZD", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 208, "recv_qty": 207, "pending_qty": 1, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "7V3WGMIF", "dest_wh": "OVD1", "route": "EU → OVD1", "ship_qty": 2, "recv_qty": 0, "pending_qty": 2, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "7NE3WEMU", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 124, "recv_qty": 108, "pending_qty": 16, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "7NE3WEMU", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 29, "recv_qty": 0, "pending_qty": 29, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "7NE3WEMU", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 33, "recv_qty": 0, "pending_qty": 33, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "3E8I8ESC", "dest_wh": "SVQ1", "route": "EU → SVQ1", "ship_qty": 2, "recv_qty": 0, "pending_qty": 2, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "6GAK81AK", "dest_wh": "BRQ2", "route": "EU → BRQ2", "ship_qty": 2, "recv_qty": 0, "pending_qty": 2, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "6GAK81AK", "dest_wh": "BRQ2", "route": "EU → BRQ2", "ship_qty": 200, "recv_qty": 0, "pending_qty": 200, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CRYVZZH1", "po": "2I58VHSP", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 36, "recv_qty": 0, "pending_qty": 36, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0D5LDYQFZ", "po": "2I58VHSP", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "2I58VHSP", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 13, "recv_qty": 10, "pending_qty": 3, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0D5LDYQFZ", "po": "8G43X7LK", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CRYVZZH1", "po": "8G43X7LK", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 52, "recv_qty": 0, "pending_qty": 52, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0GWD94VPC", "po": "6MWLVSIM", "dest_wh": "DTM2", "route": "EU → DTM2", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "2PU2FPOA", "dest_wh": "BRE2", "route": "EU → BRE2", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "1RK7TSST", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 6, "recv_qty": 0, "pending_qty": 6, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "1RK7TSST", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 36, "recv_qty": 3, "pending_qty": 33, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "8NSWHFHV", "dest_wh": "NUE1", "route": "EU → NUE1", "ship_qty": 1, "recv_qty": 0, "pending_qty": 1, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "835RPFLJ", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 15, "recv_qty": 6, "pending_qty": 9, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "1V9Q21IX", "dest_wh": "PRG2", "route": "EU → PRG2", "ship_qty": 2, "recv_qty": 0, "pending_qty": 2, "ship_date": "2026-06-04", "transit_days": 11, "threshold": 10, "level": "偏长"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0DKF6V2CV", "po": "3CZXQO5M", "dest_wh": "TCY1(美西)", "route": "KARGO-CA02(美西) → TCY1(美西)", "ship_qty": 24, "recv_qty": 0, "pending_qty": 24, "ship_date": "2026-06-04", "transit_days": 10, "threshold": 7, "level": "偏长"}, {"account": "Kargo", "brand": "JIGOO", "asin": "B0DKF6V2CV", "po": "1A241IHL", "dest_wh": "TCY2(美西)", "route": "KARGO-CA02(美西) → TCY2(美西)", "ship_qty": 136, "recv_qty": 12, "pending_qty": 124, "ship_date": "2026-06-09", "transit_days": 5, "threshold": 7, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "4XG74RDF", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 120, "recv_qty": 0, "pending_qty": 120, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "4XG74RDF", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 56, "recv_qty": 0, "pending_qty": 56, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "3RX25ROE", "dest_wh": "SVQ1", "route": "EU → SVQ1", "ship_qty": 52, "recv_qty": 0, "pending_qty": 52, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "3RX25ROE", "dest_wh": "SVQ1", "route": "EU → SVQ1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "3RX25ROE", "dest_wh": "SVQ1", "route": "EU → SVQ1", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "3RX25ROE", "dest_wh": "SVQ1", "route": "EU → SVQ1", "ship_qty": 12, "recv_qty": 0, "pending_qty": 12, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "3R62F4HY", "dest_wh": "BCN1", "route": "EU → BCN1", "ship_qty": 24, "recv_qty": 0, "pending_qty": 24, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "3R62F4HY", "dest_wh": "BCN1", "route": "EU → BCN1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "6E58HOOM", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 12, "recv_qty": 0, "pending_qty": 12, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "5BQZJLUH", "dest_wh": "OVD1", "route": "EU → OVD1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "8X8S498A", "dest_wh": "MAD7", "route": "EU → MAD7", "ship_qty": 8, "recv_qty": 0, "pending_qty": 8, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "7JH5ANHY", "dest_wh": "SVQ1", "route": "EU → SVQ1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "85S9YRXJ", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 16, "recv_qty": 0, "pending_qty": 16, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "85S9YRXJ", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "86K9PG5P", "dest_wh": "NUE1", "route": "EU → NUE1", "ship_qty": 40, "recv_qty": 0, "pending_qty": 40, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "8D7BE8DR", "dest_wh": "BRE2", "route": "EU → BRE2", "ship_qty": 36, "recv_qty": 0, "pending_qty": 36, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "84PI4CAA", "dest_wh": "PRG2", "route": "EU → PRG2", "ship_qty": 16, "recv_qty": 0, "pending_qty": 16, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "88PSGCGH", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 8, "recv_qty": 0, "pending_qty": 8, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "87N1KVSY", "dest_wh": "HAM2", "route": "EU → HAM2", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "87N1KVSY", "dest_wh": "HAM2", "route": "EU → HAM2", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "8EA39O1A", "dest_wh": "BRE4", "route": "EU → BRE4", "ship_qty": 16, "recv_qty": 0, "pending_qty": 16, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "8CFBNK6L", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "5UF5T7TY", "dest_wh": "POZ1", "route": "EU → POZ1", "ship_qty": 12, "recv_qty": 0, "pending_qty": 12, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "5S4E71GA", "dest_wh": "MAD7", "route": "EU → MAD7", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5S4E71GA", "dest_wh": "MAD7", "route": "EU → MAD7", "ship_qty": 8, "recv_qty": 0, "pending_qty": 8, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "5S4E71GA", "dest_wh": "MAD7", "route": "EU → MAD7", "ship_qty": 21, "recv_qty": 0, "pending_qty": 21, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5Q9MKWLL", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "5Q9MKWLL", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "5Q9MKWLL", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "5Q9MKWLL", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKYLGK1Z", "po": "52NYCD7B", "dest_wh": "OVD1", "route": "EU → OVD1", "ship_qty": 12, "recv_qty": 0, "pending_qty": 12, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "52NYCD7B", "dest_wh": "OVD1", "route": "EU → OVD1", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CKTKBSP8", "po": "52NYCD7B", "dest_wh": "OVD1", "route": "EU → OVD1", "ship_qty": 48, "recv_qty": 0, "pending_qty": 48, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "8V9GB9ZN", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 12, "recv_qty": 0, "pending_qty": 12, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "7F1HLZHQ", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 60, "recv_qty": 0, "pending_qty": 60, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "63OMBTXT", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "4VI5PMII", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 84, "recv_qty": 0, "pending_qty": 84, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CRYVZZH1", "po": "5EVHFW9P", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 36, "recv_qty": 0, "pending_qty": 36, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5EVHFW9P", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 124, "recv_qty": 0, "pending_qty": 124, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "5EVHFW9P", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 9, "recv_qty": 0, "pending_qty": 9, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0D5LDYQFZ", "po": "5EVHFW9P", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 16, "recv_qty": 0, "pending_qty": 16, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "8C5IKEQH", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 12, "recv_qty": 0, "pending_qty": 12, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "8C5IKEQH", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "8C5IKEQH", "dest_wh": "LEJ5", "route": "EU → LEJ5", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5XOULSAM", "dest_wh": "NUE1", "route": "EU → NUE1", "ship_qty": 8, "recv_qty": 0, "pending_qty": 8, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "5XOULSAM", "dest_wh": "NUE1", "route": "EU → NUE1", "ship_qty": 30, "recv_qty": 0, "pending_qty": 30, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0D5LDYQFZ", "po": "1IIRTDCU", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 8, "recv_qty": 0, "pending_qty": 8, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "1IIRTDCU", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "1IIRTDCU", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 66, "recv_qty": 0, "pending_qty": 66, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CRYVZZH1", "po": "1IIRTDCU", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 16, "recv_qty": 0, "pending_qty": 16, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "1IIRTDCU", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5QGSKGPP", "dest_wh": "BRE4", "route": "EU → BRE4", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "5QGSKGPP", "dest_wh": "BRE4", "route": "EU → BRE4", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "5EAH3CWU", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 6, "recv_qty": 0, "pending_qty": 6, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5EAH3CWU", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "1DVX7S9H", "dest_wh": "HAM2", "route": "EU → HAM2", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "1DVX7S9H", "dest_wh": "HAM2", "route": "EU → HAM2", "ship_qty": 27, "recv_qty": 0, "pending_qty": 27, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B08BLTZQ7R", "po": "1DVX7S9H", "dest_wh": "HAM2", "route": "EU → HAM2", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "Jimmy", "asin": "B09YH9MM1J", "po": "5F2GT14A", "dest_wh": "BRE2", "route": "EU → BRE2", "ship_qty": 3, "recv_qty": 0, "pending_qty": 3, "ship_date": "2026-06-11", "transit_days": 4, "threshold": 10, "level": "正常"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0D9VVTNPR", "po": "6AOTINQV", "dest_wh": "HLI2(美西)", "route": "KARGO-CA(美西) → HLI2(美西)", "ship_qty": 24, "recv_qty": 0, "pending_qty": 24, "ship_date": "2026-06-11", "transit_days": 3, "threshold": 7, "level": "正常"}, {"account": "Kargo", "brand": "Jimmy", "asin": "B0D9VVTNPR", "po": "6RNG3FWD", "dest_wh": "TCY1(美西)", "route": "KARGO-CA(美西) → TCY1(美西)", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-11", "transit_days": 3, "threshold": 7, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "4YFIJLTP", "dest_wh": "ZAZ1", "route": "EU → ZAZ1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "29AHUSWM", "dest_wh": "OVD1", "route": "EU → OVD1", "ship_qty": 4, "recv_qty": 0, "pending_qty": 4, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "2382DCJS", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 32, "recv_qty": 0, "pending_qty": 32, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "3UFHRPMY", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 8, "recv_qty": 0, "pending_qty": 8, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0DKY6RQRC", "po": "8M25P4SA", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 104, "recv_qty": 0, "pending_qty": 104, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "72VENJYR", "dest_wh": "DTM1", "route": "EU → DTM1", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "1OBQ1N4B", "dest_wh": "NUE1", "route": "EU → NUE1", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "7UXKTZAL", "dest_wh": "HAJ1", "route": "EU → HAJ1", "ship_qty": 124, "recv_qty": 0, "pending_qty": 124, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}, {"account": "Ansett", "brand": "JIGOO", "asin": "B0CJ9FL94H", "po": "5RC8SS2D", "dest_wh": "STR4", "route": "EU → STR4", "ship_qty": 28, "recv_qty": 0, "pending_qty": 28, "ship_date": "2026-06-18", "transit_days": -3, "threshold": 10, "level": "正常"}], "transit_summary": {"可能存在短缺": 26, "严重延迟": 2, "延迟": 1, "偏长": 30, "正常": 79}, "wh_dist": {"Kargo": [{"wh": "TCY2(美西)", "req": 384.0, "acc": 384.0, "ship": 376.0, "recv": 222.0}, {"wh": "HLI2(美西)", "req": 292.0, "acc": 292.0, "ship": 132.0, "recv": 108.0}, {"wh": "TCY1(美西)", "req": 228.0, "acc": 192.0, "ship": 172.0, "recv": 144.0}, {"wh": "ABE4(美东)", "req": 149.0, "acc": 149.0, "ship": 149.0, "recv": 124.0}, {"wh": "OAK3(美西)", "req": 100.0, "acc": 100.0, "ship": 100.0, "recv": 80.0}, {"wh": "MCE1(美西)", "req": 93.0, "acc": 93.0, "ship": 93.0, "recv": 93.0}, {"wh": "TPA2(美南)", "req": 81.0, "acc": 57.0, "ship": 57.0, "recv": 44.0}, {"wh": "BFI3(美西)", "req": 81.0, "acc": 81.0, "ship": 81.0, "recv": 81.0}, {"wh": "SAT1(美南)", "req": 72.0, "acc": 72.0, "ship": 72.0, "recv": 56.0}, {"wh": "HSV1(美南)", "req": 68.0, "acc": 68.0, "ship": 68.0, "recv": 64.0}, {"wh": "MDT1(美东)", "req": 64.0, "acc": 64.0, "ship": 64.0, "recv": 64.0}, {"wh": "XPB2(美南)", "req": 64.0, "acc": 64.0, "ship": 64.0, "recv": 64.0}, {"wh": "BOS7(美东)", "req": 61.0, "acc": 49.0, "ship": 49.0, "recv": 49.0}, {"wh": "DFW6(美南)", "req": 60.0, "acc": 60.0, "ship": 60.0, "recv": 60.0}, {"wh": "SBD2(美西)", "req": 56.0, "acc": 56.0, "ship": 56.0, "recv": 56.0}], "Ansett": [{"wh": "STR4", "req": 1529, "acc": 1529, "ship": 1409, "recv": 928}, {"wh": "HAJ1", "req": 1200, "acc": 1196, "ship": 681, "recv": 117}, {"wh": "WRO5", "req": 1092, "acc": 1080, "ship": 1048, "recv": 1035}, {"wh": "ZAZ1", "req": 734, "acc": 733, "ship": 724, "recv": 592}, {"wh": "BRQ2", "req": 391, "acc": 382, "ship": 382, "recv": 176}, {"wh": "DTM1", "req": 381, "acc": 381, "ship": 313, "recv": 221}, {"wh": "OVD1", "req": 144, "acc": 144, "ship": 141, "recv": 68}, {"wh": "NUE1", "req": 127, "acc": 127, "ship": 111, "recv": 4}, {"wh": "POZ1", "req": 104, "acc": 100, "ship": 100, "recv": 88}, {"wh": "LEJ5", "req": 101, "acc": 101, "ship": 101, "recv": 34}, {"wh": "SVQ1", "req": 97, "acc": 97, "ship": 97, "recv": 20}, {"wh": "HAM2", "req": 80, "acc": 80, "ship": 80, "recv": 14}, {"wh": "PRG2", "req": 73, "acc": 54, "ship": 67, "recv": 48}, {"wh": "BRE2", "req": 60, "acc": 60, "ship": 42, "recv": 0}, {"wh": "BCN1", "req": 56, "acc": 56, "ship": 48, "recv": 20}]}};
+
+// ── 工具 ──────────────────────────────────────────
+const fmtN   = v => (+v).toLocaleString('en',{maximumFractionDigits:0});
+const fmtAmt = (v,cur) => `${cur||'USD'} ${(+v).toLocaleString('en',{maximumFractionDigits:0})}`;
+const pctC   = v => v>=90?'#0E9F6E':v>=70?'#F59E0B':'#EF4444';
+const acctTag  = a => `<span class="tag tag-${a.toLowerCase()}">${a}</span>`;
+const brandTag = b => `<span class="tag tag-${b.toLowerCase()}">${b}</span>`;
+const levelTag = l => {
+  const m={'正常':'tag-ok','偏长':'tag-warn','延迟':'tag-delay','严重延迟':'tag-severe','可能存在短缺':'tag-shortage'};
+  return `<span class="tag ${m[l]||'tag-ok'}">${l}</span>`;
+};
+function wowSpan(diff, pct){
+  if(diff===null||diff===undefined) return '';
+  const up = diff>0, flat = diff===0;
+  const cls = flat?'wow-flat':up?'wow-up':'wow-dn';
+  const icon= flat?'→':up?'↑':'↓';
+  const p   = pct!==null&&pct!==undefined ? ` (${Math.abs(pct)}%)` : '';
+  return `<div class="m-wow ${cls}">${icon}${Math.abs(diff).toLocaleString('en',{maximumFractionDigits:0})}${p} 环比</div>`;
+}
+
+// ── 顶栏 ──────────────────────────────────────────
+document.getElementById('dataDate').textContent = DASH.data_date;
+document.getElementById('genDate').textContent  = DASH.generated;
+const wBadge = `${DASH.latest_week}（${DASH.week_start}~${DASH.week_end}）`;
+document.getElementById('weekBadge1').textContent = wBadge;
+document.getElementById('weekBadge2').textContent = wBadge;
+
+// ── ① 本周快报 ────────────────────────────────────
+function qBox(lbl, val, diff, pct){
+  return `<div class="m-box">
+    <div class="m-val">${fmtN(val)}</div>
+    <div class="m-lbl">${lbl}</div>
+    ${wowSpan(diff,pct)}
+  </div>`;
+}
+function aBox(lbl, val, cur, diff, pct){
+  return `<div class="m-box">
+    <div class="m-val-sm">${fmtAmt(val,cur)}</div>
+    <div class="m-lbl">${lbl}</div>
+    ${wowSpan(diff,pct)}
+  </div>`;
+}
+function totBox(lbl, val){
+  return `<div class="m-box">
+    <div class="m-val">${fmtN(val)}</div>
+    <div class="m-lbl">${lbl}</div>
+  </div>`;
+}
+function totAmtBox(lbl, val, cur){
+  return `<div class="m-box">
+    <div class="m-val-sm">${fmtAmt(val,cur)}</div>
+    <div class="m-lbl">${lbl}</div>
+  </div>`;
+}
+
+function renderCards(acct, wkQtyId, wkAmtId, totQtyId, totAmtId){
+  const c   = DASH.cards[acct];
+  const w   = c.week, wow = c.wow, t = c.total, cur = c.currency;
+  // 本周量
+  document.getElementById(wkQtyId).innerHTML =
+    qBox('采购量', w.req,  wow.req_wow,      wow.req_wow_pct) +
+    qBox('接单量', w.acc,  wow.acc_wow,      wow.acc_wow_pct) +
+    qBox('发货量', w.ship, wow.ship_wow,     wow.ship_wow_pct) +
+    qBox('接收量', w.recv, wow.recv_wow,     wow.recv_wow_pct);
+  // 本周金额
+  document.getElementById(wkAmtId).innerHTML =
+    aBox('采购金额', w.req_amt, cur, wow.req_amt_wow,  wow.req_amt_wow_pct) +
+    aBox('接单金额', w.acc_amt, cur, wow.acc_amt_wow,  wow.acc_amt_wow_pct);
+  // 历史累计量
+  document.getElementById(totQtyId).innerHTML =
+    totBox('采购量', t.req) + totBox('接单量', t.acc) +
+    totBox('发货量', t.ship) + totBox('接收量', t.recv);
+  // 历史累计金额
+  document.getElementById(totAmtId).innerHTML =
+    totAmtBox('采购金额', t.req_amt, cur) + totAmtBox('接单金额', t.acc_amt, cur);
+}
+renderCards('Kargo',  'k-wk-qty','k-wk-amt','k-tot-qty','k-tot-amt');
+renderCards('Ansett', 'a-wk-qty','a-wk-amt','a-tot-qty','a-tot-amt');
+
+// ── Tab ───────────────────────────────────────────
+const tabGroups = {
+  monthly: ['m-kargo','m-ansett'],
+  weekly:  ['w-kargo','w-ansett'],
+};
+function switchTab(group, activeId){
+  tabGroups[group].forEach(id=>{
+    document.getElementById(id).classList.toggle('active',id===activeId);
+  });
+  const panels = tabGroups[group];
+  document.querySelectorAll(`#${group}Tabs .tab-btn`).forEach((b,i)=>{
+    b.classList.toggle('active', panels[i]===activeId);
+  });
+}
+
+// ── Chart工厂 ─────────────────────────────────────
+const CI={};
+
+// 统一趋势图：采购量(柱)+接单量(柱)+接单率(折线右轴)，hover同时显示三指标
+function makeTrendChart(id, labels, reqData, accData, rateData, reqColor, accColor){
+  if(CI[id]) CI[id].destroy();
+  CI[id]=new Chart(document.getElementById(id).getContext('2d'),{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'采购量',data:reqData,backgroundColor:reqColor+'55',borderColor:reqColor,
+       borderWidth:1.5,borderRadius:3,order:2},
+      {label:'接单量',data:accData,backgroundColor:accColor+'88',borderColor:accColor,
+       borderWidth:1.5,borderRadius:3,order:3},
+      {label:'接单率%',data:rateData,type:'line',borderColor:'#1e3a5f',backgroundColor:'transparent',
+       borderWidth:2,pointRadius:3,pointBackgroundColor:'#1e3a5f',yAxisID:'y2',order:1},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{position:'top',labels:{font:{size:10},boxWidth:10}},
+        tooltip:{
+          mode:'index',intersect:false,
+          callbacks:{
+            label(ctx){
+              const lbl=ctx.dataset.label;
+              const v=ctx.parsed.y;
+              if(lbl==='接单率%') return ` 接单率：${v}%`;
+              return ` ${lbl}：${(+v).toLocaleString('en',{maximumFractionDigits:0})}`;
+            }
+          }
+        }
+      },
+      scales:{
+        y:{beginAtZero:true,grid:{color:'#F3F4F6'},ticks:{font:{size:10}}},
+        y2:{beginAtZero:true,max:110,position:'right',grid:{display:false},
+            ticks:{font:{size:10},callback:v=>v+'%'}}
+      }
+    }
+  });
+}
+
+function makeAmtChart(id, labels, d1, l1, d2, l2, c1, c2){
+  if(CI[id]) CI[id].destroy();
+  CI[id]=new Chart(document.getElementById(id).getContext('2d'),{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:l1,data:d1,backgroundColor:c1+'66',borderColor:c1,borderWidth:1.5,borderRadius:3},
+      {label:l2,data:d2,backgroundColor:c2+'88',borderColor:c2,borderWidth:1.5,borderRadius:3},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{position:'top',labels:{font:{size:10},boxWidth:10}},
+        tooltip:{mode:'index',intersect:false,
+          callbacks:{label(ctx){return ` ${ctx.dataset.label}：${(+ctx.parsed.y).toLocaleString('en',{maximumFractionDigits:0})}`;}}
+        }
+      },
+      scales:{y:{beginAtZero:true,grid:{color:'#F3F4F6'},
+        ticks:{font:{size:10},callback:v=>v>=1000?Math.round(v/1000)+'k':v}}}
+    }
+  });
+}
+
+// ── ② 月度 ────────────────────────────────────────
+function buildMonthly(key,id,reqColor,accColor){
+  const d=DASH.monthly[key]||[];
+  makeTrendChart(id,d.map(x=>x.month),
+    d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),reqColor,accColor);
+}
+buildMonthly('Kargo-JIGOO','cKJ','#1A56DB','#0E9F6E');
+buildMonthly('Kargo-Jimmy','cKJm','#1A56DB','#E3A008');
+buildMonthly('Ansett-JIGOO','cAJ','#7E3AF2','#0E9F6E');
+buildMonthly('Ansett-Jimmy','cAJm','#7E3AF2','#E3A008');
+
+// ── ③ 周度 ────────────────────────────────────────
+function buildWeekly(acct,qId,aId,color,cur){
+  const d=DASH.weekly_by_acct[acct]||[];
+  const lbs=d.map(x=>x.week.replace('2026-',''));
+  makeTrendChart(qId,lbs,d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),color,'#94A3B8');
+  makeAmtChart(aId,lbs,d.map(x=>x.req_amt),'采购金额('+cur+')',d.map(x=>x.acc_amt),'接单金额('+cur+')',color,'#94A3B8');
+}
+buildWeekly('Kargo', 'wKQty','wKAmt','#1A56DB','USD');
+buildWeekly('Ansett','wAQty','wAAmt','#7E3AF2','EUR');
+
+// ── ④ ASIN趋势 ────────────────────────────────────
+let currentGrain='week';
+function getAsinData(asin,grain){ return (grain==='week'?DASH.asin_weekly:DASH.asin_monthly)[asin]||[]; }
+function getLabel(d,grain){ return grain==='week'?d.week.replace('2026-',''):d.month; }
+
+function renderTop5(acct,containerId){
+  const container=document.getElementById(containerId);
+  const top5=DASH.top5[acct];
+  container.innerHTML=top5.map((asin,i)=>{
+    const info=DASH.asin_info[asin]||{};
+    const shortTitle=(info.title||'').substring(0,38);
+    return `<div class="chart-card">
+      <h4 style="font-size:11px">${acctTag(info.account||acct)} ${brandTag(info.brand||'?')}
+        <code style="font-size:11px">${asin}</code>
+        <span style="font-size:10px;color:var(--muted);font-weight:400"> ${shortTitle}…</span>
+      </h4>
+      <div class="chart-wrap"><canvas id="t5_${acct}_${i}"></canvas></div>
+    </div>`;
+  }).join('');
+  top5.forEach((asin,i)=>{
+    const d=getAsinData(asin,currentGrain);
+    makeTrendChart(`t5_${acct}_${i}`,d.map(x=>getLabel(x,currentGrain)),d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),'#1A56DB','#0E9F6E');
+  });
+}
+function setGrain(g){
+  currentGrain=g;
+  document.getElementById('grainW').classList.toggle('active',g==='week');
+  document.getElementById('grainM').classList.toggle('active',g==='month');
+  renderTop5('Kargo','kargoTop5Charts');
+  renderTop5('Ansett','ansettTop5Charts');
+  const asin=document.getElementById('asinInput').value.trim();
+  if(asin) renderAsinSearch(asin);
+}
+function renderAsinSearch(asin){
+  const d=getAsinData(asin,currentGrain);
+  const info=DASH.asin_info[asin]||{};
+  if(!d.length){alert(`未找到 ASIN：${asin}`);return;}
+  document.getElementById('searchChartTitle').textContent=
+    `${asin}  ${info.title||''}（${currentGrain==='week'?'按周':'按月'}）`;
+  makeTrendChart('cSearch',d.map(x=>getLabel(x,currentGrain)),d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),'#1A56DB','#0E9F6E');
+}
+function searchAsin(){
+  const asin=document.getElementById('asinInput').value.trim().toUpperCase();
+  if(!asin)return;
+  document.getElementById('asinInput').value=asin;
+  document.getElementById('at-search-tab').style.display='';
+  switchAsinTab('at-search'); renderAsinSearch(asin);
+}
+function resetAsinSearch(){
+  document.getElementById('asinInput').value='';
+  document.getElementById('at-search-tab').style.display='none';
+  switchAsinTab('at-kargo');
+}
+function switchAsinTab(activeId){
+  ['at-kargo','at-ansett','at-search'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.classList.toggle('active',id===activeId);
+  });
+  document.querySelectorAll('#asinTrendTabs .tab-btn').forEach(b=>{
+    b.classList.toggle('active',
+      (b.textContent.includes('Kargo')&&activeId==='at-kargo')||
+      (b.textContent.includes('Ansett')&&activeId==='at-ansett')||
+      (b.id==='at-search-tab'&&activeId==='at-search'));
+  });
+}
+renderTop5('Kargo','kargoTop5Charts');
+renderTop5('Ansett','ansettTop5Charts');
+
+// ── ⑤ ASIN汇总表 ─────────────────────────────────
+function renderAsinTable(){
+  const ac=document.getElementById('asinAcct').value;
+  const br=document.getElementById('asinBrand').value;
+  const rows=DASH.asin_table.filter(r=>(!ac||r.account===ac)&&(!br||r.brand===br));
+  document.getElementById('asinTbody').innerHTML=rows.map(r=>`<tr>
+    <td>${acctTag(r.account)}</td><td>${brandTag(r.brand)}</td>
+    <td style="font-family:monospace;font-size:11px">${r.asin}</td>
+    <td style="max-width:240px;white-space:normal;font-size:11px">${r.title}</td>
+    <td class="num">${fmtN(r.po_count)}</td>
+    <td class="num">${fmtN(r.req)}</td><td class="num">${fmtN(r.acc)}</td>
+    <td class="num">${fmtN(r.ship)}</td><td class="num">${fmtN(r.recv)}</td>
+    <td class="num" style="color:${pctC(r.acc_rate)};font-weight:700">${r.acc_rate}%</td>
+    <td class="num" style="color:${pctC(r.ship_rate)};font-weight:700">${r.ship_rate}%</td>
+    <td class="num" style="color:${pctC(r.recv_rate)};font-weight:700">${r.recv_rate}%</td>
+    <td class="num muted-cell">${fmtAmt(r.req_amt,r.currency)}</td>
+    <td class="num muted-cell">${fmtAmt(r.acc_amt,r.currency)}</td>
+  </tr>`).join('');
+}
+renderAsinTable();
+
+// ── ⑥ 仓库 ───────────────────────────────────────
+function renderWh(elId,data,color){
+  const max=Math.max(...data.map(d=>d.req),1);
+  document.getElementById(elId).innerHTML=data.map(d=>{
+    const pct=Math.round(d.req/max*100);
+    const rPct=d.req>0?Math.round(d.recv/d.req*100):0;
+    return `<div class="wh-row">
+      <div class="wh-name">${d.wh}</div>
+      <div class="wh-bar-bg"><div class="wh-bar-fill" style="width:${pct}%;background:${color}">${d.req}</div></div>
+      <div class="wh-qty" style="color:${pctC(rPct)}" title="接收率${rPct}%">↓${rPct}%</div>
+    </div>`;
+  }).join('');
+}
+renderWh('kargoWh', DASH.wh_dist.Kargo, '#1A56DB');
+renderWh('ansettWh',DASH.wh_dist.Ansett,'#7E3AF2');
+
+// ── ⑦ 在途 ───────────────────────────────────────
+const s=DASH.transit_summary;
+document.getElementById('tPills').innerHTML=[
+  ['可能存在短缺','pill-shortage'],['严重延迟','pill-severe'],
+  ['延迟','pill-delay'],['偏长','pill-warn'],['正常','pill-ok']
+].map(([l,c])=>`<div class="t-pill ${c}" onclick="ql('${l}')">
+  <span class="n">${s[l]||0}</span>${l}</div>`).join('');
+
+function ql(lv){document.getElementById('trLevel').value=lv;renderTransit();}
+function renderTransit(){
+  const ac=document.getElementById('trAcct').value;
+  const lv=document.getElementById('trLevel').value;
+  const rows=DASH.transit.filter(r=>(!ac||r.account===ac)&&(!lv||r.level===lv));
+  document.getElementById('transitTbody').innerHTML=rows.map(r=>{
+    const dc=r.transit_days>r.threshold*2?'#EF4444':r.transit_days>r.threshold?'#F59E0B':'#0E9F6E';
+    return `<tr>
+      <td>${acctTag(r.account)}</td><td>${brandTag(r.brand)}</td>
+      <td style="font-family:monospace;font-size:11px">${r.asin}</td>
+      <td style="font-family:monospace;font-size:11px">${r.po}</td>
+      <td style="font-size:11px">${r.route}</td>
+      <td><b>${r.dest_wh}</b></td><td>${r.ship_date}</td>
+      <td class="num" style="font-weight:800;color:${dc}">${r.transit_days}天</td>
+      <td class="num muted-cell">${r.threshold}天</td>
+      <td>${levelTag(r.level)}</td>
+      <td class="num">${r.ship_qty}</td><td class="num">${r.recv_qty}</td>
+      <td class="num" style="color:#EF4444;font-weight:700">${r.pending_qty}</td>
+    </tr>`;
+  }).join('');
+}
+renderTransit();
+</script>
+</body>
+</html>
