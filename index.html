@@ -279,8 +279,8 @@ tbody td{padding:9px 12px;font-size:12px;white-space:nowrap}
   </div>
 </div>
 <div class="tabs" id="asinTrendTabs">
-  <button class="tab-btn active" onclick="switchAsinTab('at-kargo')">Kargo Top5</button>
-  <button class="tab-btn" onclick="switchAsinTab('at-ansett')">Ansett Top5</button>
+  <button class="tab-btn active" onclick="switchAsinTab('at-kargo')">Kargo 全部ASIN</button>
+  <button class="tab-btn" onclick="switchAsinTab('at-ansett')">Ansett 全部ASIN</button>
   <button class="tab-btn" id="at-search-tab" style="display:none" onclick="switchAsinTab('at-search')">搜索结果</button>
 </div>
 <div id="at-kargo"  class="tab-panel active"><div class="charts-2" id="kargoTop5Charts"></div></div>
@@ -519,10 +519,24 @@ buildMonthly('Kargo-Jimmy','cKJm','#1A56DB','#E3A008');
 buildMonthly('Ansett-JIGOO','cAJ','#7E3AF2','#0E9F6E');
 buildMonthly('Ansett-Jimmy','cAJm','#7E3AF2','#E3A008');
 
+// ── 周标签：W27 06/29~07/05 ───────────────────────
+function weekLabel(ws){
+  try{
+    const yr=parseInt(ws.slice(0,4)), w=parseInt(ws.slice(-2));
+    // JS: get Monday of ISO week
+    const simple=new Date(yr,0,1+( w-1)*7);
+    const dow=simple.getDay(); // 0=Sun
+    const mon=new Date(simple); mon.setDate(simple.getDate()-(dow===0?6:dow-1));
+    const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+    const fmt=d=>`${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+    return `${ws.replace(/^\d{4}-/,'')} ${fmt(mon)}~${fmt(sun)}`;
+  }catch(e){ return ws.replace('2026-',''); }
+}
+
 // ── ③ 周度 ────────────────────────────────────────
 function buildWeekly(acct,qId,aId,color,cur){
   const d=DASH.weekly_by_acct[acct]||[];
-  const lbs=d.map(x=>x.week.replace('2026-',''));
+  const lbs=d.map(x=>weekLabel(x.week));
   makeTrendChart(qId,lbs,d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),color,'#94A3B8');
   makeAmtChart(aId,lbs,d.map(x=>x.req_amt),'采购金额('+cur+')',d.map(x=>x.acc_amt),'接单金额('+cur+')',color,'#94A3B8');
 }
@@ -532,12 +546,21 @@ buildWeekly('Ansett','wAQty','wAAmt','#7E3AF2','EUR');
 // ── ④ ASIN趋势 ────────────────────────────────────
 let currentGrain='week';
 function getAsinData(asin,grain){ return (grain==='week'?DASH.asin_weekly:DASH.asin_monthly)[asin]||[]; }
-function getLabel(d,grain){ return grain==='week'?d.week.replace('2026-',''):d.month; }
+function getLabel(d,grain){ return grain==='week'? weekLabel(d.week) : d.month; }
 
-function renderTop5(acct,containerId){
+// 获取某账号下所有ASIN，按历史采购量降序
+function getAcctAsins(acct){
+  return Object.entries(DASH.asin_info)
+    .filter(([,v])=>v.account===acct)
+    .map(([asin])=>({asin, total:( DASH.asin_weekly[asin]||[]).reduce((s,x)=>s+x.req,0)}))
+    .sort((a,b)=>b.total-a.total)
+    .map(x=>x.asin);
+}
+
+function renderAllAsins(acct,containerId){
   const container=document.getElementById(containerId);
-  const top5=DASH.top5[acct];
-  container.innerHTML=top5.map((asin,i)=>{
+  const asins=getAcctAsins(acct);
+  container.innerHTML=asins.map((asin,i)=>{
     const info=DASH.asin_info[asin]||{};
     const shortTitle=(info.title||'').substring(0,38);
     return `<div class="chart-card">
@@ -545,20 +568,20 @@ function renderTop5(acct,containerId){
         <code style="font-size:11px">${asin}</code>
         <span style="font-size:10px;color:var(--muted);font-weight:400"> ${shortTitle}…</span>
       </h4>
-      <div class="chart-wrap"><canvas id="t5_${acct}_${i}"></canvas></div>
+      <div class="chart-wrap"><canvas id="ta_${acct}_${i}"></canvas></div>
     </div>`;
   }).join('');
-  top5.forEach((asin,i)=>{
+  asins.forEach((asin,i)=>{
     const d=getAsinData(asin,currentGrain);
-    makeTrendChart(`t5_${acct}_${i}`,d.map(x=>getLabel(x,currentGrain)),d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),'#1A56DB','#0E9F6E');
+    makeTrendChart(`ta_${acct}_${i}`,d.map(x=>getLabel(x,currentGrain)),d.map(x=>x.req),d.map(x=>x.acc),d.map(x=>x.acc_rate),'#1A56DB','#0E9F6E');
   });
 }
 function setGrain(g){
   currentGrain=g;
   document.getElementById('grainW').classList.toggle('active',g==='week');
   document.getElementById('grainM').classList.toggle('active',g==='month');
-  renderTop5('Kargo','kargoTop5Charts');
-  renderTop5('Ansett','ansettTop5Charts');
+  renderAllAsins('Kargo','kargoTop5Charts');
+  renderAllAsins('Ansett','ansettTop5Charts');
   const asin=document.getElementById('asinInput').value.trim();
   if(asin) renderAsinSearch(asin);
 }
@@ -593,8 +616,8 @@ function switchAsinTab(activeId){
       (b.id==='at-search-tab'&&activeId==='at-search'));
   });
 }
-renderTop5('Kargo','kargoTop5Charts');
-renderTop5('Ansett','ansettTop5Charts');
+renderAllAsins('Kargo','kargoTop5Charts');
+renderAllAsins('Ansett','ansettTop5Charts');
 
 // ── ⑤ ASIN汇总表 ─────────────────────────────────
 function renderAsinTable(){
